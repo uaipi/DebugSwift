@@ -133,4 +133,41 @@ public class DebugSwift {
 
         return tabBar
     }
+
+    /// Returns one native feature screen wrapped in its own navigation controller.
+    /// Shared SwiftUI panels can use this to keep category navigation in SwiftUI
+    /// while retaining the UIKit implementation for feature screens that have not
+    /// been migrated yet.
+    @MainActor
+    public static func debugFeatureViewController(for feature: DebugSwiftFeature) -> UIViewController {
+        let rootController: UIViewController
+
+        switch feature {
+        case .network:
+            rootController = NetworkViewController()
+        case .performance:
+            rootController = PerformanceViewController()
+        case .interface:
+            rootController = InterfaceViewController()
+        case .resources:
+            rootController = ResourcesViewController()
+        case .app:
+            rootController = AppViewController()
+        }
+
+        rootController.navigationItem.largeTitleDisplayMode = .always
+
+        let navigationController = UINavigationController(rootViewController: rootController)
+        navigationController.navigationBar.prefersLargeTitles = true
+        navigationController.navigationBar.tintColor = .white
+        navigationController.view.backgroundColor = .black
+        navigationController.overrideUserInterfaceStyle = .dark
+        return navigationController
+    }
+
+    /// The default feature categories that are currently visible in the debugger.
+    @MainActor
+    public static func availableDebugFeatures() -> [DebugSwiftFeature] {
+        DebugSwiftFeature.allCases.filter { !FeatureHandling.hiddenFeatures.contains($0) }
+    }
 }

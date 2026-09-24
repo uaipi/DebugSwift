@@ -3,7 +3,7 @@ DebugSwift
 </h1>
 
 <p align="center">
-<img src="https://img.shields.io/badge/Platforms-iOS%2014.0+-blue.svg"/>
+<img src="https://img.shields.io/badge/Platforms-iOS%2016.0+-blue.svg"/>
 <img src="https://img.shields.io/github/v/release/DebugSwift/DebugSwift?style=flat&label=Swift%20Package%20Index&color=red"/>    
 <img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2FDebugSwift%2FDebugSwift%2Fbadge%3Ftype%3Dswift-versions"/>
 <img src="https://img.shields.io/github/license/DebugSwift/DebugSwift?style=flat"/>
@@ -44,7 +44,7 @@ DebugSwift
 
 ## Android with Skip
 
-The Android package is in [`DebugSwiftAndroid`](DebugSwiftAndroid/). It adds a shared SwiftUI panel that Skip Lite compiles to Android Compose and supplies platform integrations in Kotlin. On iOS, the existing UIKit debugger can be embedded with `UIViewControllerRepresentable`.
+The Swift package exports `DebugSwift` and `DebugSwiftAndroid` products. `DebugSwiftAndroidPanel` uses a shared SwiftUI category bar; Skip Lite compiles the Android feature screens to Compose, while iOS keeps the existing feature controllers embedded one category at a time with `UIViewControllerRepresentable`. As screens move to shared SwiftUI, those UIKit bridges can be removed individually. Platform services use Kotlin on Android and the existing native implementation on iOS.
 
 Build the Android sample with `skip export --project Example/Android --no-ios --android --arch aarch64 --dir build/skip-android`. Android networking capture requires the host to add the provided OkHttp interceptor (or a matching hook for its networking stack). Host callbacks for preferences, Room/Realm databases, location, push tokens, and custom diagnostics are documented in [the Android sample guide](Example/Android/README.md).
 

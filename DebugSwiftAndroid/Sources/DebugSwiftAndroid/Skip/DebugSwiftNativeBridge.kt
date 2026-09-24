@@ -8,4 +8,7 @@ object DebugSwiftNativeBridge {
     @JvmStatic
     fun perform(featureID: String, actionID: String, value: String): String =
         AndroidDebugTools.perform(featureID, actionID, value)
+
+    @JvmStatic
+    fun log(message: String) = AndroidDebugTools.log(message)
 }

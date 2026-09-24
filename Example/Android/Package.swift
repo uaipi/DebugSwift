@@ -12,11 +12,11 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/skiptools/skip.git", from: "1.9.11"),
         .package(url: "https://github.com/skiptools/skip-ui.git", from: "1.60.0"),
-        .package(name: "DebugSwiftAndroid", path: "../../DebugSwiftAndroid")
+        .package(name: "DebugSwift", path: "../..")
     ],
     targets: [
         .target(name: "DebugSwiftAndroidSample", dependencies: [
-            .product(name: "DebugSwiftAndroid", package: "DebugSwiftAndroid"),
+            .product(name: "DebugSwiftAndroid", package: "DebugSwift"),
             .product(name: "SkipUI", package: "skip-ui")
         ], resources: [.process("Resources")], plugins: [.plugin(name: "skipstone", package: "skip")]),
     ]

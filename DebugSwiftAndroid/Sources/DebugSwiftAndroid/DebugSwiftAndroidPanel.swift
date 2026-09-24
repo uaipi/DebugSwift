@@ -16,11 +16,7 @@ public struct DebugSwiftAndroidPanel: View {
     public init() {}
 
     public var body: some View {
-        #if os(iOS)
-        DebugSwiftUIKitPanel()
-        #else
         DebugSwiftAndroidPanelContent()
-        #endif
     }
 }
 
@@ -31,7 +27,7 @@ private struct DebugSwiftAndroidPanelContent: View {
         VStack(spacing: 0) {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 8) {
-                    ForEach(DebugSwiftArea.allCases) { area in
+                    ForEach(visibleAreas) { area in
                         Button {
                             selectedArea = area
                         } label: {
@@ -50,13 +46,29 @@ private struct DebugSwiftAndroidPanelContent: View {
                 .padding(.vertical, 10)
             }
 
+            #if os(iOS)
+            DebugSwiftIOSFeatureHost(area: selectedArea)
+                .id(selectedArea.id)
+                .frame(maxWidth: .infinity, maxHeight: .infinity)
+            #else
             NavigationStack {
                 DebugSwiftFeatureList(area: selectedArea)
                     .navigationTitle(selectedArea.title)
             }
+            .id(selectedArea.id)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+            #endif
         }
         .preferredColorScheme(ColorScheme.dark)
+    }
+
+    var visibleAreas: [DebugSwiftArea] {
+        #if os(iOS)
+        let visibleIDs = Set(DebugSwift.availableDebugFeatures().map(\.rawValue))
+        return DebugSwiftArea.allCases.filter { visibleIDs.contains($0.id) }
+        #else
+        return DebugSwiftArea.allCases
+        #endif
     }
 }
 
@@ -106,6 +118,7 @@ enum DebugSwiftArea: String, CaseIterable, Identifiable, Hashable {
         case .performance:
             [
                 .init("performance_overview", "Live Metrics", "Track CPU, memory, frames per second, and process activity."),
+                .init("performance_widget", "Performance Widget", "Show live CPU, memory, and slow-frame metrics over the host app."),
                 .init("battery", "Battery", "Inspect battery level, charging state, and power source."),
                 .init("disk", "Disk I/O", "Inspect app storage size and process read/write byte counters."),
                 .init("frame_drops", "Frame Drops", "Record slow frames and inspect their timing on a timeline."),
@@ -123,7 +136,7 @@ enum DebugSwiftArea: String, CaseIterable, Identifiable, Hashable {
                 .init("view_borders", "View Borders", "Outline visible native views to locate spacing and clipping issues."),
                 .init("animation_control", "Animation Settings", "Inspect the system animation scales and open Android Developer options to change them."),
                 .init("compose_renders", "Compose Render Tracking", "Record Compose composition activity and retain render counts."),
-                .init("doc_recorder", "Documentation Recorder", "Capture a screenshot annotated with recent touch locations."),
+                .init("doc_recorder", "Documentation Recorder", "Capture taps and scrolls, then save a screenshot annotated with numbered markers and arrows."),
                 .init("measurement", "Measurement Tool", "Inspect element positions, sizes, and spacing in the active window."),
                 .init("color_palette", "Color Palette", "Sample colors from a captured screen image and export the palette.")
             ]
@@ -151,7 +164,8 @@ enum DebugSwiftArea: String, CaseIterable, Identifiable, Hashable {
                 .init("deep_links", "Deep Links", "Inspect the current intent URI and registered app link information."),
                 .init("loaded_libraries", "Installed Libraries", "Inspect installed DEX splits, native library paths, ABIs, and the runtime class loader."),
                 .init("location", "Location", "Inspect the last location reported by the host app."),
-                .init("event_bus", "Event Timeline", "Browse network, performance, interface, app, and resource events.")
+                .init("event_bus", "Event Timeline", "Browse network, performance, interface, app, and resource events."),
+                .init("agent_debug_log", "Agent Debug Log", "Stream app events, network activity, console messages, and crashes to an NDJSON file.")
             ]
         }
     }
@@ -246,6 +260,8 @@ struct DebugSwiftFeatureDetail: View {
             ["refresh", "filter_requests", "clear", "export"]
         case "websocket", "har_export", "console", "crashes", "backtraces", "event_bus":
             ["refresh", "capture", "clear", "export"]
+        case "agent_debug_log":
+            ["refresh", "toggle", "clear", "export"]
         case "graphql", "network_history":
             ["refresh", "filter_requests", "clear", "export"]
         case "network_injection":
@@ -262,9 +278,15 @@ struct DebugSwiftFeatureDetail: View {
             ["refresh", "export"]
         case "sqlite", "core_data", "swift_data":
             ["refresh", "run_query", "export"]
+        case "grid":
+            ["refresh", "set_grid", "toggle", "capture"]
+        case "doc_recorder":
+            ["refresh", "capture", "clear", "export"]
+        case "color_palette":
+            ["refresh", "capture", "clear", "export"]
         case "animation_control":
             ["refresh", "open_animation_settings"]
-        case "grid", "touches", "view_borders", "thread_checker":
+        case "touches", "view_borders", "thread_checker", "performance_widget":
             ["refresh", "toggle", "capture"]
         case "push_simulator":
             ["refresh", "notify"]
@@ -283,6 +305,7 @@ struct DebugSwiftFeatureDetail: View {
         case "network_injection": "Value: ms, status, pattern=>body, or URL pattern"
         case "network_thresholds": "Request limit,window seconds"
         case "network_encryption": "URL regex:base64 AES key (body is base64 nonce + AES-GCM ciphertext)"
+        case "grid": "Spacing dp, optional color: 24,#663399FF"
         case "preferences": "Store|key=value"
         case "files": "App path: files/, cache/, or databases/"
         case "push_simulator": "Notification title | message | delay in seconds"
@@ -300,7 +323,7 @@ struct DebugSwiftFeatureDetail: View {
         case "clear": "Clear history"
         case "export": "Export"
         case "filter_requests": "Apply filter"
-        case "toggle": feature.id == "network_thresholds" ? "Toggle request blocking" : "Enable / disable"
+        case "toggle": feature.id == "network_thresholds" ? "Toggle request blocking" : feature.id == "agent_debug_log" ? "Start / stop capture" : "Enable / disable"
         case "set_delay": "Set request delay"
         case "inject_failure": "Fail next request"
         case "set_http_error": "Set HTTP error code"
@@ -309,6 +332,7 @@ struct DebugSwiftFeatureDetail: View {
         case "clear_keys": "Clear decryption keys"
         case "set_threshold": "Set request threshold"
         case "register_key": "Register AES key"
+        case "set_grid": "Set grid spacing and color"
         case "set_preference": "Write preference"
         case "browse_files": "Open path"
         case "notify": "Post test notification"
@@ -323,6 +347,25 @@ struct DebugSwiftFeatureDetail: View {
 
 /// Platform facade used by the shared panel and by Android host integrations.
 public enum DebugSwiftAndroidRuntime {
+    #if os(iOS)
+    @MainActor private static var isIOSDebuggerPrepared = false
+
+    @MainActor
+    static func prepareIOSDebugger() {
+        guard !isIOSDebuggerPrepared else { return }
+        DebugSwift().setup()
+        isIOSDebuggerPrepared = true
+    }
+    #endif
+
+    public static func log(_ message: String) {
+        #if os(Android)
+        DebugSwiftNativeBridge.log(message)
+        #else
+        NSLog("[DebugSwiftAndroid] %@", message)
+        #endif
+    }
+
     public static func snapshot(featureID: String) -> String {
         #if os(Android)
         return DebugSwiftNativeBridge.snapshot(featureID)
@@ -341,10 +384,13 @@ public enum DebugSwiftAndroidRuntime {
 }
 
 #if os(iOS)
-struct DebugSwiftUIKitPanel: UIViewControllerRepresentable {
+private struct DebugSwiftIOSFeatureHost: UIViewControllerRepresentable {
+    let area: DebugSwiftArea
+
     func makeUIViewController(context: Context) -> UIViewController {
-        DebugSwift().setup()
-        return DebugSwift.debugViewController()
+        DebugSwiftAndroidRuntime.prepareIOSDebugger()
+        let feature = DebugSwiftFeature(rawValue: area.id) ?? .network
+        return DebugSwift.debugFeatureViewController(for: feature)
     }
 
     func updateUIViewController(_ uiViewController: UIViewController, context: Context) {}

@@ -36,6 +36,7 @@ import java.security.KeyStore
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
@@ -43,6 +44,10 @@ import java.util.concurrent.atomic.AtomicBoolean
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
+import kotlin.math.PI
+import kotlin.math.atan2
+import kotlin.math.cos
+import kotlin.math.sin
 
 /** Android implementations for platform services that have no UIKit equivalent. */
 object AndroidDebugTools {
@@ -51,6 +56,8 @@ object AndroidDebugTools {
     private const val MAX_RECORDS = 500
     private const val MAIN_THREAD_STALL_MS = 700L
     private const val NOTIFICATION_CHANNEL = "debugswift_local_tests"
+    private const val AGENT_LOG_FILENAME = "agent-debug.ndjson"
+    private const val MAX_AGENT_LOG_BYTES = 5L * 1024L * 1024L
 
     @Volatile private var appContext: Context? = null
     @Volatile private var foregroundActivity = WeakReference<Activity>(null)
@@ -70,14 +77,20 @@ object AndroidDebugTools {
     private val events = CopyOnWriteArrayList<String>()
     private val slowFrameEvents = CopyOnWriteArrayList<String>()
     private val recentTouches = CopyOnWriteArrayList<Pair<Float, Float>>()
+    private val recordedInteractions = CopyOnWriteArrayList<RecordedInteraction>()
     private val registeredPreferences = CopyOnWriteArrayList<String>()
     private val customInfo = linkedMapOf<String, String>()
     private val customActions = linkedMapOf<String, () -> Unit>()
     private val enabledTools = mutableSetOf("network_injection")
+    private val agentLogSessionID = UUID.randomUUID().toString()
+    @Volatile private var agentLogEnabled = false
     private val destroyedActivities = CopyOnWriteArrayList<DestroyedActivity>()
     private val webViewHosts = CopyOnWriteArrayList<String>()
     private var debugOverlay: DebugOverlay? = null
+    @Volatile private var activeTouchStart: Pair<Float, Float>? = null
     @Volatile private var currentFilePath = "files"
+    @Volatile private var gridSpacingDp = 20f
+    @Volatile private var gridColor = Color.argb(55, 60, 170, 255)
     private var lastLocation = "No location has been reported by the host app."
     private var pushToken = "No FCM token has been reported by the host app."
     private var thresholdLimit = 0
@@ -109,6 +122,14 @@ object AndroidDebugTools {
         val error: String,
         val graphqlOperation: String,
         val source: String
+    )
+
+    private data class RecordedInteraction(
+        val kind: String,
+        val startX: Float,
+        val startY: Float,
+        val endX: Float,
+        val endY: Float
     )
 
     private data class DestroyedActivity(
@@ -160,10 +181,10 @@ object AndroidDebugTools {
         val context = appContext ?: return "Android runtime has not been installed. Call AndroidDebugTools.install(application) from the host app."
         return when (featureID) {
             "http", "websocket", "network_injection", "network_thresholds", "graphql", "network_encryption", "har_export", "webview_network", "network_history" -> networkSnapshot(featureID)
-            "performance_overview", "battery", "disk", "frame_drops", "hangs", "backtraces", "leaks", "thread_checker", "super_calls" -> performanceSnapshot(context, featureID)
+            "performance_overview", "performance_widget", "battery", "disk", "frame_drops", "hangs", "backtraces", "leaks", "thread_checker", "super_calls" -> performanceSnapshot(context, featureID)
             "view_hierarchy", "grid", "touches", "view_borders", "animation_control", "compose_renders", "doc_recorder", "measurement", "color_palette" -> interfaceSnapshot(context, featureID)
             "files", "preferences", "keychain", "sqlite", "realm", "core_data", "swift_data", "cookies", "security_audit" -> resourcesSnapshot(context, featureID)
-            "crashes", "console", "device_info", "push_token", "push_simulator", "custom_actions", "custom_info", "deep_links", "loaded_libraries", "location", "event_bus" -> appSnapshot(context, featureID)
+            "crashes", "console", "device_info", "push_token", "push_simulator", "custom_actions", "custom_info", "deep_links", "loaded_libraries", "location", "event_bus", "agent_debug_log" -> appSnapshot(context, featureID)
             else -> "Unknown DebugSwift tool: $featureID"
         }
     }
@@ -221,6 +242,7 @@ object AndroidDebugTools {
                 "Response decryption keys cleared from this process."
             }
             "set_preference" -> writePreference(context, value)
+            "set_grid" -> setGridOptions(value)
             "run_query" -> {
                 val parts = value.split("|", limit = 2)
                 if (parts.size != 2) "Enter databaseName|SELECT ..."
@@ -247,8 +269,29 @@ object AndroidDebugTools {
         val line = "${timestamp()} ${priorityName(priority)} $tag: $message"
         consoleRecords.add(line)
         trim(consoleRecords)
+        appendAgentEntry(
+            kind = "console",
+            location = tag,
+            message = message,
+            data = mapOf("priority" to priorityName(priority))
+        )
         Log.println(priority, tag, message)
         publishEvent("app", message)
+    }
+
+    private fun setGridOptions(value: String): String {
+        val parts = value.split(",", limit = 2).map { it.trim() }
+        val spacing = parts.firstOrNull()?.toFloatOrNull()
+            ?: return "Enter grid spacing in dp, optionally followed by a color such as 24,#663399FF."
+        if (spacing !in 4f..256f) return "Grid spacing must be between 4 and 256 dp."
+        val color = parts.getOrNull(1)?.takeIf { it.isNotEmpty() }?.let {
+            runCatching { Color.parseColor(it) }.getOrElse { return "Invalid color. Use #RRGGBB or #AARRGGBB." }
+        }
+        gridSpacingDp = spacing
+        if (color != null) gridColor = color
+        debugOverlay?.postInvalidate()
+        publishEvent("interface", "Grid set to ${gridSpacingDp}dp")
+        return "Grid spacing set to ${gridSpacingDp}dp" + (color?.let { " with #${"%08X".format(it)}." } ?: ".")
     }
 
     fun recordNetwork(
@@ -277,6 +320,20 @@ object AndroidDebugTools {
         )
         trim(networkRecords)
         persistNetworkHistory()
+        appendAgentEntry(
+            kind = "network",
+            location = "OkHttp/$source",
+            message = "$method $url ($status)",
+            data = mapOf(
+                "method" to method,
+                "url" to url,
+                "status" to status,
+                "durationMs" to durationMs,
+                "requestBytes" to requestBytes,
+                "responseBytes" to responseBytes,
+                "error" to error
+            )
+        )
         val now = SystemClock.elapsedRealtime()
         synchronized(this) {
             if (thresholdStartMs == 0L || now - thresholdStartMs > thresholdWindowMs) {
@@ -354,11 +411,41 @@ object AndroidDebugTools {
     }
 
     fun recordTouch(event: MotionEvent) {
-        if (event.actionMasked == MotionEvent.ACTION_DOWN || event.actionMasked == MotionEvent.ACTION_MOVE) {
-            recentTouches.add(event.rawX to event.rawY)
-            while (recentTouches.size > 24) recentTouches.removeAt(0)
-            debugOverlay?.invalidate()
+        val point = localTouchPosition(event)
+        when (event.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                activeTouchStart = point
+                recentTouches.add(point)
+            }
+            MotionEvent.ACTION_MOVE -> recentTouches.add(point)
+            MotionEvent.ACTION_UP -> {
+                recentTouches.add(point)
+                val start = activeTouchStart ?: point
+                val dx = point.first - start.first
+                val dy = point.second - start.second
+                val density = appContext?.resources?.displayMetrics?.density ?: 1f
+                val threshold = 24f * density
+                val kind = if (dx * dx + dy * dy >= threshold * threshold) "scroll" else "tap"
+                recordedInteractions.add(RecordedInteraction(kind, start.first, start.second, point.first, point.second))
+                trim(recordedInteractions)
+                appendAgentEntry(
+                    kind = "event",
+                    location = "Interface/$kind",
+                    message = if (kind == "tap") "Tap recorded" else "Scroll gesture recorded",
+                    data = mapOf("x" to point.first, "y" to point.second, "startX" to start.first, "startY" to start.second)
+                )
+                activeTouchStart = null
+            }
+            MotionEvent.ACTION_CANCEL -> activeTouchStart = null
         }
+        while (recentTouches.size > 24) recentTouches.removeAt(0)
+        debugOverlay?.invalidate()
+    }
+
+    private fun localTouchPosition(event: MotionEvent): Pair<Float, Float> {
+        val offset = IntArray(2)
+        foregroundActivity.get()?.window?.decorView?.getLocationOnScreen(offset)
+        return (event.rawX - offset[0]) to (event.rawY - offset[1])
     }
 
     fun captureHierarchy(): String {
@@ -600,6 +687,11 @@ object AndroidDebugTools {
             "frame_drops" -> "Frames sampled: $frameCount\nSlow frames (>32ms): $slowFrameCount\nSlowest frame: ${slowestFrameMs}ms\n\nRecent slow frames:\n" + slowFrameEvents.takeLast(40).asReversed().joinToString("\n").ifEmpty { "No slow frame events captured." }
             "hangs" -> "Detected main-thread stalls: ${events.count { it.contains("main thread stalled") }}\nThreshold: ${MAIN_THREAD_STALL_MS}ms\nRecent events:\n" + events.filter { it.contains("main thread stalled") }.takeLast(20).joinToString("\n").ifEmpty { "No stalls detected." } + "\n\nAndroid process ANRs:\n${platformExitHistory(context, android.app.ApplicationExitInfo.REASON_ANR)}"
             "backtraces" -> backtraces.takeLast(20).asReversed().joinToString("\n\n").ifEmpty { "No backtraces captured. Use Capture to save the current thread stack." }
+            "performance_widget" -> {
+                val enabled = synchronized(enabledTools) { "performance_widget" in enabledTools }
+                if (!enabled) "Performance widget is disabled. Enable it to show live metrics over the host app."
+                else "Widget is active in the host app window.\nCPU: ${"%.1f".format(cpuUsagePercent)}%\nFrames/s: $framesPerSecond\nSlow frames: $slowFrameCount"
+            }
             "leaks" -> {
                 val candidates = destroyedActivities.filter {
                     SystemClock.elapsedRealtime() - it.destroyedAtMs >= 5_000L && it.reference.get() != null
@@ -625,7 +717,7 @@ object AndroidDebugTools {
     private fun interfaceSnapshot(context: Context, featureID: String): String {
         return when (featureID) {
             "view_hierarchy", "measurement" -> captureHierarchy()
-            "grid", "touches", "view_borders" -> "Enabled: ${featureID in enabledTools}\nOverlay is drawn in the host app window without the system draw-over-other-apps permission.\nRecent touches: ${recentTouches.size}"
+            "grid", "touches", "view_borders" -> "Enabled: ${synchronized(enabledTools) { featureID in enabledTools }}\nOverlay is drawn in the host app window without the system draw-over-other-apps permission.\nGrid: ${gridSpacingDp}dp, #${"%08X".format(gridColor)}\nRecent touches: ${recentTouches.size}"
             "animation_control" -> {
                 val keys = listOf("window_animation_scale", "transition_animation_scale", "animator_duration_scale")
                 "Android system animation scales:\n" + keys.joinToString("\n") { key ->
@@ -634,7 +726,7 @@ object AndroidDebugTools {
                 } + "\n\nUse Open Developer options to change these system-wide settings."
             }
             "compose_renders" -> "Compose recompositions observed: $composeRenderCount\nMeasured frame callbacks: $frameCount\nSlow frames: $slowFrameCount"
-            "doc_recorder" -> "Recorded interactions: ${recentTouches.size}\nLast screenshot: ${lastRecordingPath.ifEmpty { "none" }}"
+            "doc_recorder" -> "Recorded gestures: ${recordedInteractions.size}\nTaps: ${recordedInteractions.count { it.kind == "tap" }}\nScrolls: ${recordedInteractions.count { it.kind == "scroll" }}\nLast screenshot: ${lastRecordingPath.ifEmpty { "none" }}"
             "color_palette" -> "Most common colors in the last captured app window:\n${lastPalette.joinToString("\n").ifEmpty { "Capture a screen to sample its colors." }}"
             else -> "View hierarchy entries: ${captureHierarchy().lineSequence().count()}"
         }
@@ -686,6 +778,7 @@ object AndroidDebugTools {
             }
             "location" -> lastLocation
             "event_bus" -> events.takeLast(100).asReversed().joinToString("\n").ifEmpty { "No diagnostic events published yet." }
+            "agent_debug_log" -> agentDebugLogSnapshot(context)
             "device_info" -> deviceInfo(context)
             else -> deviceInfo(context)
         }
@@ -730,6 +823,13 @@ object AndroidDebugTools {
                 return "Network and WebSocket history cleared."
             }
             "console" -> consoleRecords.clear()
+            "agent_debug_log" -> {
+                persistenceExecutor.execute {
+                    File(appContext!!.filesDir, AGENT_LOG_FILENAME).delete()
+                    File(appContext!!.filesDir, "$AGENT_LOG_FILENAME.previous").delete()
+                }
+                return "Agent debug log cleared."
+            }
             "crashes" -> {
                 crashRecords.clear()
                 appContext?.filesDir?.listFiles()?.filter { it.name.startsWith("debugswift-crash-") }?.forEach { it.delete() }
@@ -744,6 +844,12 @@ object AndroidDebugTools {
                 slowFrameCount = 0
                 slowestFrameMs = 0
             }
+            "doc_recorder" -> {
+                recordedInteractions.clear()
+                recentTouches.clear()
+                lastRecordingPath = ""
+            }
+            "color_palette" -> lastPalette = emptyList()
             else -> {
                 return "$featureID has no history to clear."
             }
@@ -785,7 +891,10 @@ object AndroidDebugTools {
             }
         }
         when (featureID) {
-            "grid", "touches", "view_borders" -> updateOverlay()
+            "grid", "touches", "view_borders", "performance_widget" -> updateOverlay()
+            "agent_debug_log" -> if (enabled) {
+                agentLogEnabled = true
+            }
             "thread_checker" -> if (enabled) enableStrictMode() else disableStrictMode()
             "network_thresholds" -> thresholdBlockRequests = enabled
             "network_injection" -> {
@@ -794,6 +903,7 @@ object AndroidDebugTools {
             }
         }
         publishEvent("interface", "$featureID ${if (enabled) "enabled" else "disabled"}")
+        if (featureID == "agent_debug_log" && !enabled) agentLogEnabled = false
         return "$featureID ${if (enabled) "enabled" else "disabled"}."
     }
 
@@ -805,10 +915,12 @@ object AndroidDebugTools {
             "har_export", "network_history" -> exportHar()
             "realm" -> File(context.cacheDir, "debugswift-realm-${System.currentTimeMillis()}.txt").apply { writeText(snapshot(featureID)) }
             "console" -> File(context.cacheDir, "debugswift-console-${System.currentTimeMillis()}.txt").apply { writeText(consoleRecords.joinToString("\n")) }
+            "agent_debug_log" -> File(context.filesDir, AGENT_LOG_FILENAME).takeIf { it.exists() }
             "crashes" -> File(context.cacheDir, "debugswift-crashes-${System.currentTimeMillis()}.txt").apply { writeText(crashRecords.joinToString("\n\n")) }
             "files" -> exportCurrentFile(context)
+            "color_palette" -> File(context.cacheDir, "debugswift-palette-${System.currentTimeMillis()}.txt").apply { writeText(lastPalette.joinToString("\n")) }
             "sqlite", "core_data", "swift_data" -> File(context.cacheDir, "debugswift-resources-${System.currentTimeMillis()}.txt").apply { writeText(snapshot(featureID)) }
-            "doc_recorder", "color_palette" -> File(lastRecordingPath).takeIf { lastRecordingPath.isNotEmpty() && it.exists() }
+            "doc_recorder" -> File(lastRecordingPath).takeIf { lastRecordingPath.isNotEmpty() && it.exists() }
             else -> null
         }
         return file?.let { "Exported ${it.name}\n${it.absolutePath}" } ?: "Nothing to export for $featureID."
@@ -866,6 +978,13 @@ object AndroidDebugTools {
             appContext?.let { context ->
                 runCatching { File(context.filesDir, "debugswift-crash-${System.currentTimeMillis()}.txt").writeText(record) }
             }
+            appendAgentEntry(
+                kind = "crash",
+                location = thread.name,
+                message = error.message ?: error.javaClass.name,
+                data = mapOf("exception" to error.javaClass.name, "stackTrace" to writer.toString()),
+                writeImmediately = true
+            )
             publishEvent("app", "Uncaught ${error.javaClass.simpleName}")
             original?.uncaughtException(thread, error)
         }
@@ -893,6 +1012,14 @@ object AndroidDebugTools {
                     trim(events)
                     Log.w(TAG, event)
                 }
+                val showWidget = synchronized(enabledTools) { "performance_widget" in enabledTools }
+                if (showWidget) {
+                    cpuUsagePercent = cpuUsage()
+                    val currentFrames = frameCount
+                    framesPerSecond = (currentFrames - previousFrameCount).coerceAtLeast(0)
+                    previousFrameCount = currentFrames
+                    debugOverlay?.invalidate()
+                }
             }
         }, 1, 1, TimeUnit.SECONDS)
     }
@@ -905,6 +1032,8 @@ object AndroidDebugTools {
     @Volatile private var lastPalette: List<String> = emptyList()
     @Volatile private var composeRenderCount = 0L
     @Volatile private var cpuUsagePercent = 0.0
+    @Volatile private var framesPerSecond = 0L
+    private var previousFrameCount = 0L
     private var previousCpuTimeMs = 0L
     private var previousWallTimeMs = 0L
 
@@ -912,7 +1041,7 @@ object AndroidDebugTools {
         composeRenderCount++
     }
 
-    private fun cpuUsage(currentCpuMs: Long = Process.getElapsedCpuTime()): Double {
+    @Synchronized private fun cpuUsage(currentCpuMs: Long = Process.getElapsedCpuTime()): Double {
         val now = SystemClock.elapsedRealtime()
         val elapsed = now - previousWallTimeMs
         val cpu = currentCpuMs - previousCpuTimeMs
@@ -949,7 +1078,7 @@ object AndroidDebugTools {
     private fun updateOverlay() {
         val activity = foregroundActivity.get() ?: return
         activity.runOnUiThread {
-            val enabled = synchronized(enabledTools) { enabledTools.any { it == "grid" || it == "touches" || it == "view_borders" } }
+            val enabled = synchronized(enabledTools) { enabledTools.any { it == "grid" || it == "touches" || it == "view_borders" || it == "performance_widget" } }
             val decor = activity.window.decorView as? ViewGroup ?: return@runOnUiThread
             val previous = debugOverlay
             previous?.detach()
@@ -960,9 +1089,15 @@ object AndroidDebugTools {
     }
 
     private class DebugOverlay(context: Context) : View(context) {
-        private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(55, 60, 170, 255); strokeWidth = 1f }
+        private val gridPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = gridColor; strokeWidth = 1f }
         private val borderPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(90, 255, 90, 90); style = Paint.Style.STROKE; strokeWidth = 1f }
         private val touchPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(180, 255, 210, 60); style = Paint.Style.FILL }
+        private val widgetBackgroundPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.argb(220, 24, 26, 32) }
+        private val widgetTextPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textSize = 13 * resources.displayMetrics.density
+            typeface = android.graphics.Typeface.create("monospace", android.graphics.Typeface.NORMAL)
+        }
         private val density = resources.displayMetrics.density
         private var observedDecor = WeakReference<ViewGroup>(null)
         private var globalLayoutListener: android.view.ViewTreeObserver.OnGlobalLayoutListener? = null
@@ -995,7 +1130,8 @@ object AndroidDebugTools {
             super.onDraw(canvas)
             val active: Set<String> = synchronized(enabledTools) { enabledTools.toSet() }
             if ("grid" in active) {
-                val spacing = (20 * density).coerceAtLeast(1f)
+                gridPaint.color = gridColor
+                val spacing = (gridSpacingDp * density).coerceAtLeast(1f)
                 var x = 0f
                 while (x < width) { canvas.drawLine(x, 0f, x, height.toFloat(), gridPaint); x += spacing }
                 var y = 0f
@@ -1003,6 +1139,25 @@ object AndroidDebugTools {
             }
             if ("view_borders" in active) drawViewBorders(canvas, this)
             if ("touches" in active) recentTouches.forEach { (x, y) -> canvas.drawCircle(x, y, 8 * density, touchPaint) }
+            if ("performance_widget" in active) {
+                val runtime = Runtime.getRuntime()
+                val used = runtime.totalMemory() - runtime.freeMemory()
+                val lines = listOf(
+                    "CPU ${"%.1f".format(cpuUsagePercent)}%",
+                    "MEM ${formatBytes(used)}",
+                    "FPS $framesPerSecond  ·  slow $slowFrameCount"
+                )
+                val left = 14 * density
+                val top = 72 * density
+                val padding = 10 * density
+                val lineHeight = 18 * density
+                val boxWidth = lines.maxOf { widgetTextPaint.measureText(it) } + padding * 2
+                val boxHeight = lineHeight * lines.size + padding * 2
+                canvas.drawRoundRect(left, top, left + boxWidth, top + boxHeight, 8 * density, 8 * density, widgetBackgroundPaint)
+                lines.forEachIndexed { index, line ->
+                    canvas.drawText(line, left + padding, top + padding + lineHeight * (index + 1), widgetTextPaint)
+                }
+            }
         }
 
         private fun drawViewBorders(canvas: Canvas, root: View) {
@@ -1026,12 +1181,24 @@ object AndroidDebugTools {
         val canvas = Canvas(bitmap)
         view.draw(canvas)
         if (annotateTouches) {
-            val paint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.RED; textSize = 28f; style = Paint.Style.FILL }
-            recentTouches.forEachIndexed { index, (x, y) ->
-                canvas.drawCircle(x, y, 18f, paint)
-                paint.color = Color.WHITE
-                canvas.drawText((index + 1).toString(), x - 7f, y + 9f, paint)
-                paint.color = Color.RED
+            val interactions = recordedInteractions.takeLast(24)
+            val markPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.RED; style = Paint.Style.FILL; strokeWidth = 4f }
+            val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.RED; style = Paint.Style.STROKE; strokeWidth = 5f }
+            val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = 24f; textAlign = Paint.Align.CENTER; style = Paint.Style.FILL }
+            interactions.forEachIndexed { index, interaction ->
+                if (interaction.kind == "scroll") {
+                    canvas.drawLine(interaction.startX, interaction.startY, interaction.endX, interaction.endY, linePaint)
+                    val angle = atan2(interaction.endY - interaction.startY, interaction.endX - interaction.startX)
+                    val headLength = 22f
+                    val spread = (PI / 6).toFloat()
+                    canvas.drawLine(interaction.endX, interaction.endY, interaction.endX - headLength * cos(angle - spread), interaction.endY - headLength * sin(angle - spread), linePaint)
+                    canvas.drawLine(interaction.endX, interaction.endY, interaction.endX - headLength * cos(angle + spread), interaction.endY - headLength * sin(angle + spread), linePaint)
+                    canvas.drawCircle(interaction.startX, interaction.startY, 15f, markPaint)
+                    canvas.drawText((index + 1).toString(), interaction.startX, interaction.startY + 8f, labelPaint)
+                } else {
+                    canvas.drawCircle(interaction.endX, interaction.endY, 18f, markPaint)
+                    canvas.drawText((index + 1).toString(), interaction.endX, interaction.endY + 8f, labelPaint)
+                }
             }
         }
         val file = File(appContext!!.cacheDir, "debugswift-screen-${System.currentTimeMillis()}.png")
@@ -1290,7 +1457,18 @@ object AndroidDebugTools {
             threadPolicy.penaltyLog()
         }
         android.os.StrictMode.setThreadPolicy(threadPolicy.build())
-        android.os.StrictMode.setVmPolicy(android.os.StrictMode.VmPolicy.Builder().detectAll().penaltyLog().build())
+        val vmPolicy = android.os.StrictMode.VmPolicy.Builder().detectAll()
+        if (Build.VERSION.SDK_INT >= 28) {
+            vmPolicy.penaltyListener(java.util.concurrent.Executor { command -> mainHandler.post(command) }) { violation ->
+                val detail = "${timestamp()} VM ${violation.javaClass.simpleName}\n${violation.stackTraceToString()}"
+                threadViolations.add(detail)
+                trim(threadViolations)
+                publishEvent("performance", "StrictMode VM ${violation.javaClass.simpleName}")
+            }
+        } else {
+            vmPolicy.penaltyLog()
+        }
+        android.os.StrictMode.setVmPolicy(vmPolicy.build())
     }
 
     private fun disableStrictMode() {
@@ -1313,8 +1491,69 @@ object AndroidDebugTools {
     }
 
     private fun publishEvent(domain: String, message: String) {
+        val eventTimestamp = System.currentTimeMillis()
         events.add("${timestamp()} [$domain] $message")
         trim(events)
+        val kind = when {
+            domain == "network" -> "network"
+            message.startsWith("Activity ") || message.startsWith("Intent ") -> "lifecycle"
+            else -> "event"
+        }
+        appendAgentEntry(
+            kind = kind,
+            location = domain,
+            message = message,
+            data = mapOf("domain" to domain),
+            timestampMs = eventTimestamp
+        )
+    }
+
+    private fun agentDebugLogSnapshot(context: Context): String {
+        val file = File(context.filesDir, AGENT_LOG_FILENAME)
+        val recentEntries = runCatching { file.readLines(Charsets.UTF_8).takeLast(20) }.getOrDefault(emptyList())
+        return "Capture: ${if (agentLogEnabled) "ON" else "OFF"}\n" +
+            "Session: $agentLogSessionID\n" +
+            "Path: ${file.absolutePath}\n" +
+            "Size: ${formatBytes(file.length())}\n" +
+            "Recent entries:\n" + recentEntries.joinToString("\n").ifEmpty { "No records yet. Enable capture to collect events." }
+    }
+
+    private fun appendAgentEntry(
+        kind: String,
+        location: String,
+        message: String,
+        data: Map<String, Any?> = emptyMap(),
+        timestampMs: Long = System.currentTimeMillis(),
+        writeImmediately: Boolean = false
+    ) {
+        if (!agentLogEnabled) return
+        val context = appContext ?: return
+        val payload = org.json.JSONObject()
+            .put("sessionId", agentLogSessionID)
+            .put("location", location)
+            .put("message", message.take(16_000))
+            .put("kind", kind)
+            .put("hypothesisId", "")
+            .put("runId", "debugswift-android")
+            .put("timestamp", timestampMs)
+        if (data.isNotEmpty()) {
+            val dataJSON = org.json.JSONObject()
+            data.forEach { (key, value) -> dataJSON.put(key, value) }
+            payload.put("data", dataJSON)
+        }
+        val line = payload.toString() + "\n"
+        val writeRecord = {
+            runCatching {
+                val file = File(context.filesDir, AGENT_LOG_FILENAME)
+                if (file.length() + line.toByteArray(Charsets.UTF_8).size > MAX_AGENT_LOG_BYTES) {
+                    val previous = File(context.filesDir, "$AGENT_LOG_FILENAME.previous")
+                    previous.delete()
+                    file.renameTo(previous)
+                }
+                file.appendText(line, Charsets.UTF_8)
+            }
+        }
+        if (writeImmediately) writeRecord() else persistenceExecutor.execute { writeRecord() }
     }
 
     private fun graphqlOperation(body: String): String {
