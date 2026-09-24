@@ -38,9 +38,15 @@ DebugSwift
 
 ## Requirements
 
-- **iOS 14.0+**
+- **iOS 16.0+**
 - **Swift 6.0+**
 - **Xcode 16.0+**
+
+## Android with Skip
+
+The Android package is in [`DebugSwiftAndroid`](DebugSwiftAndroid/). It adds a shared SwiftUI panel that Skip Lite compiles to Android Compose and supplies platform integrations in Kotlin. On iOS, the existing UIKit debugger can be embedded with `UIViewControllerRepresentable`.
+
+Build the Android sample with `skip export --project Example/Android --no-ios --android --arch aarch64 --dir build/skip-android`. Android networking capture requires the host to add the provided OkHttp interceptor (or a matching hook for its networking stack). Host callbacks for preferences, Room/Realm databases, location, push tokens, and custom diagnostics are documented in [the Android sample guide](Example/Android/README.md).
 
 ## Features
 
