@@ -91,6 +91,7 @@ object AndroidDebugTools {
     private val enabledTools = mutableSetOf("network_injection")
     private val agentLogSessionID = UUID.randomUUID().toString()
     @Volatile private var agentLogEnabled = false
+    @Volatile private var logcatFilter = ""
     private val destroyedActivities = CopyOnWriteArrayList<DestroyedActivity>()
     private val webViewHosts = CopyOnWriteArrayList<String>()
     private var debugOverlay: DebugOverlay? = null
@@ -196,7 +197,7 @@ object AndroidDebugTools {
             "performance_overview", "performance_widget", "battery", "disk", "memory_warning", "frame_drops", "hangs", "backtraces", "leaks", "thread_checker", "super_calls" -> performanceSnapshot(context, featureID)
             "view_hierarchy", "grid", "touches", "view_borders", "animation_control", "dark_mode", "compose_renders", "doc_recorder", "measurement", "color_palette" -> interfaceSnapshot(context, featureID)
             "files", "preferences", "keychain", "sqlite", "realm", "core_data", "swift_data", "cookies", "security_audit" -> resourcesSnapshot(context, featureID)
-            "crashes", "console", "device_info", "push_token", "push_simulator", "custom_actions", "custom_info", "deep_links", "loaded_libraries", "location", "event_bus", "agent_debug_log" -> appSnapshot(context, featureID)
+            "crashes", "console", "oslog_console", "device_info", "push_token", "push_simulator", "custom_actions", "custom_info", "deep_links", "loaded_libraries", "location", "event_bus", "agent_debug_log" -> appSnapshot(context, featureID)
             else -> "Unknown DebugSwift tool: $featureID"
         }
     }
@@ -234,6 +235,10 @@ object AndroidDebugTools {
             "filter_requests" -> {
                 networkFilter = value.trim()
                 networkSnapshot(featureID)
+            }
+            "filter_logs" -> {
+                logcatFilter = value.trim()
+                logcatSnapshot()
             }
             "browse_files" -> {
                 currentFilePath = value.trim().ifEmpty { "files" }
@@ -892,10 +897,32 @@ object AndroidDebugTools {
         }
     }
 
+    private fun logcatSnapshot(): String {
+        val result = runCatching {
+            val process = ProcessBuilder("logcat", "-d", "-t", "500", "--pid=${Process.myPid()}")
+                .redirectErrorStream(true)
+                .start()
+            val output = process.inputStream.bufferedReader().use { it.readText() }
+            val exitCode = process.waitFor()
+            if (exitCode != 0) return "Android Logcat is unavailable (exit $exitCode):\n${output.takeLast(8_000)}"
+            output
+        }.getOrElse { return "Android Logcat is unavailable: ${it.message ?: it.javaClass.simpleName}" }
+        val filtered = result.lineSequence()
+            .filter { logcatFilter.isBlank() || it.contains(logcatFilter, ignoreCase = true) }
+            .toList()
+            .takeLast(300)
+            .joinToString("\n")
+            .takeLast(128_000)
+        val filterSummary = logcatFilter.takeIf { it.isNotBlank() }?.let { "\nFilter: $it" }.orEmpty()
+        return "Android Logcat records for this process PID ${Process.myPid()}$filterSummary\n\n" +
+            filtered.ifEmpty { "No matching Logcat records are currently available." }
+    }
+
     private fun appSnapshot(context: Context, featureID: String): String {
         return when (featureID) {
             "crashes" -> "Saved crash reports:\n" + crashRecords.takeLast(20).asReversed().joinToString("\n\n") { it }.ifEmpty { "No uncaught crash reports saved by DebugSwift." } + "\n\nRecent Android process exits:\n${platformExitHistory(context)}"
             "console" -> consoleRecords.takeLast(100).asReversed().joinToString("\n").ifEmpty { "No messages captured. Use DebugSwiftAndroidRuntime.log() from the host app." }
+            "oslog_console" -> logcatSnapshot()
             "push_token" -> pushToken
             "push_simulator" -> "Create a local Android notification without an FCM server. Enter title | message | optional delay seconds, then choose Post test notification.\nChannel: $NOTIFICATION_CHANNEL"
             "custom_actions" -> synchronized(customActions) { customActions.keys.toList() }.joinToString("\n").ifEmpty { "No custom actions registered by the host app." }
@@ -1045,6 +1072,7 @@ object AndroidDebugTools {
             "har_export", "network_history" -> exportHar()
             "realm" -> File(context.cacheDir, "debugswift-realm-${System.currentTimeMillis()}.txt").apply { writeText(snapshot(featureID)) }
             "console" -> File(context.cacheDir, "debugswift-console-${System.currentTimeMillis()}.txt").apply { writeText(consoleRecords.joinToString("\n")) }
+            "oslog_console" -> File(context.cacheDir, "debugswift-logcat-${System.currentTimeMillis()}.txt").apply { writeText(logcatSnapshot()) }
             "agent_debug_log" -> File(context.filesDir, AGENT_LOG_FILENAME).takeIf { it.exists() }
             "crashes" -> File(context.cacheDir, "debugswift-crashes-${System.currentTimeMillis()}.txt").apply { writeText(crashRecords.joinToString("\n\n")) }
             "files" -> exportCurrentFile(context)

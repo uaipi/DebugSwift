@@ -198,6 +198,7 @@ enum DebugSwiftArea: String, CaseIterable, Identifiable, Hashable {
             return [
                 .init("crashes", "Crash Reports", "Save uncaught application crashes with stack traces and timestamps."),
                 .init("console", "Console", "View, clear, and export messages written through the DebugSwift logger."),
+                .init("oslog_console", "System Log", "Browse this app's Android Logcat records, filter messages, and export the results."),
                 .init("device_info", "Device Info", "Inspect app version, Android version, device, display, and memory details."),
                 .init("push_token", "Push Token", "Register and display an app-provided Firebase Cloud Messaging token."),
                 .init("push_simulator", "Push Simulator", "Create local notification scenarios for app testing."),
@@ -473,6 +474,8 @@ struct DebugSwiftFeatureDetail: View {
             ["refresh", "filter_requests", "clear", "export"]
         case "websocket", "har_export", "console", "crashes", "backtraces", "event_bus":
             ["refresh", "capture", "clear", "export"]
+        case "oslog_console":
+            ["refresh", "filter_logs", "export"]
         case "agent_debug_log":
             ["refresh", "toggle", "clear", "export"]
         case "memory_warning":
@@ -521,6 +524,7 @@ struct DebugSwiftFeatureDetail: View {
     var inputHint: String? {
         switch feature.id {
         case "http", "graphql", "network_history": "Filter requests by URL, method, or body"
+        case "oslog_console": "Filter log message or tag"
         case "network_injection": "Value: ms, status, pattern=>body, or URL pattern"
         case "network_thresholds": "Request limit,window seconds"
         case "network_encryption": "URL regex:base64 AES key (body is base64 nonce + AES-GCM ciphertext)"
@@ -542,6 +546,7 @@ struct DebugSwiftFeatureDetail: View {
         case "clear": "Clear history"
         case "export": "Export"
         case "filter_requests": "Apply filter"
+        case "filter_logs": "Apply log filter"
         case "toggle": feature.id == "network_thresholds" ? "Toggle request blocking" : feature.id == "agent_debug_log" ? "Start / stop capture" : feature.id == "dark_mode" ? "Toggle dark appearance" : "Enable / disable"
         case "reset_dark_mode": "Follow system appearance"
         case "set_delay": "Set request delay"
