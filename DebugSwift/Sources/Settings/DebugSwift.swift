@@ -173,6 +173,62 @@ public class DebugSwift {
 }
 
 public extension DebugSwift {
+    /// The network tools exposed in the shared SwiftUI feature list.
+    @MainActor
+    static func availableNetworkFeatureIDs() -> [String] {
+        var featureIDs = ["http", "network_injection", "network_thresholds", "graphql", "network_encryption", "har_export", "webview_network"]
+        let disabledMethods = App.shared.disableMethods
+        if !disabledMethods.contains(.webSocket) {
+            featureIDs.append("websocket")
+        }
+        if disabledMethods.contains(.wkWebView) {
+            featureIDs.removeAll { $0 == "webview_network" }
+        }
+        #if canImport(SwiftData)
+        if #available(iOS 17.0, *),
+           FeatureHandling.enabledBetaFeatures.contains(.networkSessionPersistence),
+           NetworkSessionPersistenceManager.isPersistenceEnabledPreference {
+            featureIDs.append("network_history")
+        }
+        #endif
+        return featureIDs
+    }
+
+    /// Builds an existing UIKit network inspector for a single shared feature row.
+    @MainActor
+    static func debugNetworkViewController(for featureID: String) -> UIViewController? {
+        let rootController: UIViewController
+        switch featureID {
+        case "http", "graphql", "network_encryption", "har_export":
+            rootController = NetworkViewController(mode: .http)
+        case "websocket":
+            rootController = NetworkViewController(mode: .websocket)
+        case "webview_network":
+            rootController = NetworkViewController(mode: .webview)
+        case "network_injection":
+            rootController = NetworkInjectionSettingsController()
+        case "network_thresholds":
+            rootController = NetworkThresholdController()
+        case "network_history":
+            #if canImport(SwiftData)
+            guard #available(iOS 17.0, *) else { return nil }
+            rootController = NetworkSessionHistoryViewController()
+            #else
+            return nil
+            #endif
+        default:
+            return nil
+        }
+
+        rootController.navigationItem.largeTitleDisplayMode = .never
+        let navigationController = UINavigationController(rootViewController: rootController)
+        navigationController.navigationBar.prefersLargeTitles = false
+        navigationController.navigationBar.tintColor = .white
+        navigationController.view.backgroundColor = .black
+        navigationController.overrideUserInterfaceStyle = .dark
+        return navigationController
+    }
+
     /// The app tools exposed in the shared SwiftUI feature list.
     @MainActor
     static func availableAppFeatureIDs() -> [String] {

@@ -47,7 +47,7 @@ private struct DebugSwiftAndroidPanelContent: View {
             }
 
             #if os(iOS)
-            if selectedArea == .interface || selectedArea == .resources || selectedArea == .app {
+            if selectedArea == .network || selectedArea == .interface || selectedArea == .resources || selectedArea == .app {
                 NavigationStack {
                     DebugSwiftFeatureList(area: selectedArea)
                         .navigationTitle(selectedArea.title)
@@ -114,7 +114,7 @@ enum DebugSwiftArea: String, CaseIterable, Identifiable, Hashable {
     var features: [DebugSwiftTool] {
         switch self {
         case .network:
-            return [
+            let features: [DebugSwiftTool] = [
                 .init("http", "HTTP Inspector", "Capture requests and responses, inspect bodies, filter traffic, and export request history."),
                 .init("websocket", "WebSocket Inspector", "Inspect WebSocket connections, sent frames, and received frames."),
                 .init("network_injection", "Network Injection", "Add request delay, failure, HTTP errors, and response body rewrite rules."),
@@ -125,6 +125,12 @@ enum DebugSwiftArea: String, CaseIterable, Identifiable, Hashable {
                 .init("webview_network", "WebView Network", "Capture navigation and resource requests made by embedded browser views."),
                 .init("network_history", "Session History", "Search saved network sessions and export or clear their request history.")
             ]
+            #if os(iOS)
+            let availableIDs = Set(DebugSwift.availableNetworkFeatureIDs())
+            return features.filter { availableIDs.contains($0.id) }
+            #else
+            return features
+            #endif
         case .performance:
             return [
                 .init("performance_overview", "Live Metrics", "Track CPU, memory, frames per second, and process activity."),
@@ -263,6 +269,9 @@ private struct DebugSwiftFeatureDestination: View {
         #if os(iOS)
         if feature.id == "grid" {
             DebugSwiftGridOverlaySettingsView()
+        } else if ["http", "websocket", "network_injection", "network_thresholds", "graphql", "network_encryption", "har_export", "webview_network", "network_history"].contains(feature.id) {
+            DebugSwiftIOSNativeNetworkHost(featureID: feature.id)
+                .ignoresSafeArea(edges: .bottom)
         } else if ["touches", "colorize", "animations", "dark_mode", "measurement"].contains(feature.id) {
             DebugSwiftInterfaceSettingView(featureID: feature.id)
         } else if ["swiftui_render", "doc_recorder", "color_palette"].contains(feature.id) {
@@ -439,6 +448,17 @@ private struct DebugSwiftIOSNativeAppHost: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> UIViewController {
         DebugSwiftAndroidRuntime.prepareIOSDebugger()
         return DebugSwift.debugAppViewController(for: featureID) ?? UIViewController()
+    }
+
+    func updateUIViewController(_ viewController: UIViewController, context: Context) {}
+}
+
+private struct DebugSwiftIOSNativeNetworkHost: UIViewControllerRepresentable {
+    let featureID: String
+
+    func makeUIViewController(context: Context) -> UIViewController {
+        DebugSwiftAndroidRuntime.prepareIOSDebugger()
+        return DebugSwift.debugNetworkViewController(for: featureID) ?? UIViewController()
     }
 
     func updateUIViewController(_ viewController: UIViewController, context: Context) {}
