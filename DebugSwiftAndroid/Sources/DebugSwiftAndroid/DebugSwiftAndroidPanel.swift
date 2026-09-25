@@ -265,7 +265,9 @@ private struct DebugSwiftFeatureDestination: View {
         #if os(iOS)
         if feature.id == "grid" {
             DebugSwiftGridOverlaySettingsView()
-        } else if ["http", "websocket", "network_injection", "network_thresholds", "graphql", "network_encryption", "har_export", "webview_network", "network_history"].contains(feature.id) {
+        } else if feature.id == "network_thresholds" {
+            DebugSwiftNetworkThresholdView()
+        } else if ["http", "websocket", "network_injection", "graphql", "network_encryption", "har_export", "webview_network", "network_history"].contains(feature.id) {
             DebugSwiftIOSNativeNetworkHost(featureID: feature.id)
                 .ignoresSafeArea(edges: .bottom)
         } else if ["performance_overview", "performance_widget", "battery", "disk", "memory_warning", "frame_drops", "hangs", "backtraces", "leaks", "thread_checker", "super_calls"].contains(feature.id) {
@@ -297,6 +299,8 @@ private struct DebugSwiftFeatureDestination: View {
         #else
         if feature.id == "grid" {
             DebugSwiftGridOverlaySettingsView()
+        } else if feature.id == "network_thresholds" {
+            DebugSwiftNetworkThresholdView()
         } else {
             DebugSwiftFeatureDetail(feature: feature)
         }
@@ -416,6 +420,172 @@ struct DebugSwiftGridOverlayState {
     var size = 28.0
     var opacity = 0.5
     var colorIndex = 0
+}
+
+private struct DebugSwiftNetworkThresholdView: View {
+    @State private var trackingEnabled = false
+    @State private var thresholdLimit = 1000
+    @State private var windowSeconds = 60
+    @State private var blockingEnabled = false
+    @State private var currentRequestCount = 0
+    @State private var totalBreaches = 0
+    @State private var endpointDetails = "No endpoint limits configured."
+    @State private var breachDetails = "No threshold breaches."
+    @State private var statusMessage = ""
+    @State private var confirmsHistoryClear = false
+    @State private var refreshTimer: Timer?
+
+    var body: some View {
+        Form {
+            Section("Current Status") {
+                Toggle("Enable Tracking", isOn: Binding(
+                    get: { trackingEnabled },
+                    set: { enabled in
+                        trackingEnabled = enabled
+                        apply("set_threshold_tracking", value: enabled ? "true" : "false")
+                    }
+                ))
+
+                HStack {
+                    Text("Current Requests")
+                    Spacer()
+                    if trackingEnabled {
+                        let percentage = thresholdLimit > 0 ? Int((Double(currentRequestCount) / Double(thresholdLimit)) * 100.0) : 0
+                        Text("\(currentRequestCount) / \(thresholdLimit) (\(percentage)%)")
+                            .foregroundColor(percentage >= 90 ? Color.red : percentage >= 70 ? Color.orange : Color.green)
+                    } else {
+                        Text("Disabled per \(windowSeconds)s")
+                            .foregroundColor(Color.secondary)
+                    }
+                }
+
+                HStack {
+                    Text("Total Breaches")
+                    Spacer()
+                    Text("\(totalBreaches)")
+                        .foregroundColor(Color.secondary)
+                }
+            }
+
+            Section("Configuration") {
+                Stepper(label: {
+                    Text("Threshold Limit: \(thresholdLimit) requests")
+                }, onIncrement: {
+                    updateThresholdLimit(thresholdLimit + 10)
+                }, onDecrement: {
+                    updateThresholdLimit(thresholdLimit - 10)
+                })
+
+                Stepper(label: {
+                    Text("Time Window: \(windowSeconds) seconds")
+                }, onIncrement: {
+                    updateWindow(windowSeconds + 10)
+                }, onDecrement: {
+                    updateWindow(windowSeconds - 10)
+                })
+
+                Toggle("Block Exceeding Requests", isOn: Binding(
+                    get: { blockingEnabled },
+                    set: { enabled in
+                        blockingEnabled = enabled
+                        apply("set_threshold_blocking", value: enabled ? "true" : "false")
+                    }
+                ))
+            }
+
+            Section("Endpoint Limits") {
+                Text(endpointDetails)
+                    .font(Font.system(Font.TextStyle.footnote, design: Font.Design.monospaced))
+                    .frame(maxWidth: CGFloat.infinity, alignment: Alignment.leading)
+            }
+
+            Section("Recent Breaches") {
+                Text(breachDetails)
+                    .font(Font.system(Font.TextStyle.footnote, design: Font.Design.monospaced))
+                    .frame(maxWidth: CGFloat.infinity, alignment: Alignment.leading)
+            }
+
+            Section("Actions") {
+                Button("Refresh") { refresh() }
+                Button("Clear History", role: ButtonRole.destructive) { confirmsHistoryClear = true }
+                Button("Export Logs") {
+                    statusMessage = DebugSwiftAndroidRuntime.perform(featureID: "network_thresholds", actionID: "export")
+                }
+            }
+
+            if !statusMessage.isEmpty {
+                Section("Status") {
+                    Text(statusMessage)
+                        .font(Font.caption)
+                }
+            }
+        }
+        .navigationTitle("Request Threshold")
+        .onAppear {
+            refresh()
+            refreshTimer?.invalidate()
+            refreshTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { _ in refresh() }
+        }
+        .onDisappear {
+            refreshTimer?.invalidate()
+            refreshTimer = nil
+        }
+        .alert("Clear request history?", isPresented: $confirmsHistoryClear) {
+            Button("Cancel", role: ButtonRole.cancel) {}
+            Button("Clear History", role: ButtonRole.destructive) {
+                apply("clear_threshold_history")
+            }
+        } message: {
+            Text("This removes the request history and recorded threshold breaches.")
+        }
+    }
+
+    private func apply(_ actionID: String, value: String = "") {
+        statusMessage = DebugSwiftAndroidRuntime.perform(
+            featureID: "network_thresholds",
+            actionID: actionID,
+            value: value
+        )
+        refresh()
+    }
+
+    private func updateThresholdLimit(_ value: Int) {
+        let updatedValue = min(1000, max(1, value))
+        guard updatedValue != thresholdLimit else { return }
+        thresholdLimit = updatedValue
+        apply("set_threshold", value: "\(updatedValue),\(windowSeconds)")
+    }
+
+    private func updateWindow(_ value: Int) {
+        let updatedValue = min(300, max(10, value))
+        guard updatedValue != windowSeconds else { return }
+        windowSeconds = updatedValue
+        apply("set_threshold", value: "\(thresholdLimit),\(updatedValue)")
+    }
+
+    private func refresh() {
+        let rows = DebugSwiftAndroidRuntime.snapshot(featureID: "network_thresholds").components(separatedBy: "\n")
+        let settings = rows.first?.components(separatedBy: "|") ?? []
+        if settings.count >= 7, settings[0] == "threshold" {
+            trackingEnabled = settings[1] == "true"
+            thresholdLimit = Int(settings[2]) ?? 1000
+            windowSeconds = Int(settings[3]) ?? 60
+            blockingEnabled = settings[4] == "true"
+            currentRequestCount = Int(settings[5]) ?? 0
+            totalBreaches = Int(settings[6]) ?? 0
+        }
+
+        let details = rows.dropFirst().joined(separator: "\n")
+        let sections = details.components(separatedBy: "\n\nRECENT BREACHES\n")
+        let endpointText = sections.first?
+            .replacingOccurrences(of: "ENDPOINT LIMITS\n", with: "")
+        if let endpointText, !endpointText.isEmpty {
+            endpointDetails = endpointText
+        } else {
+            endpointDetails = "No endpoint limits configured."
+        }
+        breachDetails = sections.count > 1 ? sections[1] : "No threshold breaches."
+    }
 }
 
 #if os(iOS)
@@ -690,6 +860,17 @@ public enum DebugSwiftAndroidRuntime {
         return DebugSwiftNativeBridge.snapshot(featureID)
         #else
         switch featureID {
+        case "network_thresholds":
+            let snapshot = DebugSwift.Network.shared.getThresholdSnapshot()
+            let endpointRows = snapshot.endpointLimits.map { "\($0.endpoint) — \($0.limit) per \(Int($0.timeWindow))s" }
+            let dateFormatter = DateFormatter()
+            dateFormatter.dateStyle = .short
+            dateFormatter.timeStyle = .short
+            let breachRows = snapshot.recentBreaches.map { "\(dateFormatter.string(from: $0.timestamp)) · \($0.message)" }
+            let endpoints = endpointRows.isEmpty ? "No endpoint limits configured." : endpointRows.joined(separator: "\n")
+            let breaches = breachRows.isEmpty ? "No threshold breaches." : breachRows.joined(separator: "\n")
+            return "threshold|\(snapshot.isEnabled)|\(snapshot.limit)|\(Int(snapshot.timeWindow))|\(snapshot.shouldBlockRequests)|\(snapshot.currentRequestCount)|\(snapshot.totalBreaches)\n" +
+                "ENDPOINT LIMITS\n\(endpoints)\n\nRECENT BREACHES\n\(breaches)"
         case "device_info":
             return UserInfo.infos.map { "\($0.title) \($0.detail)" }.joined(separator: "\n")
         case "push_token":
@@ -718,6 +899,34 @@ public enum DebugSwiftAndroidRuntime {
         #if os(Android)
         return DebugSwiftNativeBridge.perform(featureID, actionID, value)
         #else
+        if featureID == "network_thresholds" {
+            let network = DebugSwift.Network.shared
+            switch actionID {
+            case "set_threshold_tracking":
+                if value == "true" { network.enableRequestTracking() } else if value == "false" { network.disableRequestTracking() }
+                else { return "Set request tracking to true or false." }
+                return "Request tracking updated."
+            case "set_threshold_blocking":
+                guard value == "true" || value == "false" else { return "Set request blocking to true or false." }
+                network.setRequestBlocking(value == "true")
+                return "Request blocking updated."
+            case "set_threshold":
+                let parts = value.split(separator: ",", omittingEmptySubsequences: false)
+                guard parts.count == 2, let limit = Int(parts[0]), let window = Double(parts[1]), limit > 0, window > 0 else {
+                    return "Enter request limit,window seconds."
+                }
+                network.setThreshold(limit, timeWindow: window)
+                return "Request threshold set to \(limit) per \(Int(window))s."
+            case "clear_threshold_history":
+                network.clearThresholdHistory()
+                return "Request threshold history cleared."
+            case "export":
+                network.exportThresholdLogs()
+                return "Sharing request threshold logs."
+            default:
+                break
+            }
+        }
         if actionID == "copy_token", ["device_info", "push_token"].contains(featureID) {
             return DebugSwift.APNSToken.copyToClipboard() ? "APNS token copied to the clipboard." : "No registered APNS token is available to copy."
         }

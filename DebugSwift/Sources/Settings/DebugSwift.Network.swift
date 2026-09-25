@@ -11,6 +11,59 @@ import CoreData
 import SwiftData
 #endif
 
+public struct DebugSwiftThresholdEndpointSnapshot: Sendable {
+    public let endpoint: String
+    public let limit: Int
+    public let timeWindow: TimeInterval
+
+    public init(endpoint: String, limit: Int, timeWindow: TimeInterval) {
+        self.endpoint = endpoint
+        self.limit = limit
+        self.timeWindow = timeWindow
+    }
+}
+
+public struct DebugSwiftThresholdBreachSnapshot: Sendable {
+    public let timestamp: Date
+    public let message: String
+
+    public init(timestamp: Date, message: String) {
+        self.timestamp = timestamp
+        self.message = message
+    }
+}
+
+public struct DebugSwiftThresholdSnapshot: Sendable {
+    public let isEnabled: Bool
+    public let limit: Int
+    public let timeWindow: TimeInterval
+    public let shouldBlockRequests: Bool
+    public let currentRequestCount: Int
+    public let totalBreaches: Int
+    public let endpointLimits: [DebugSwiftThresholdEndpointSnapshot]
+    public let recentBreaches: [DebugSwiftThresholdBreachSnapshot]
+
+    public init(
+        isEnabled: Bool,
+        limit: Int,
+        timeWindow: TimeInterval,
+        shouldBlockRequests: Bool,
+        currentRequestCount: Int,
+        totalBreaches: Int,
+        endpointLimits: [DebugSwiftThresholdEndpointSnapshot],
+        recentBreaches: [DebugSwiftThresholdBreachSnapshot]
+    ) {
+        self.isEnabled = isEnabled
+        self.limit = limit
+        self.timeWindow = timeWindow
+        self.shouldBlockRequests = shouldBlockRequests
+        self.currentRequestCount = currentRequestCount
+        self.totalBreaches = totalBreaches
+        self.endpointLimits = endpointLimits
+        self.recentBreaches = recentBreaches
+    }
+}
+
 extension DebugSwift {
     public class Network: @unchecked Sendable {
         public static let shared = Network()
@@ -83,6 +136,33 @@ extension DebugSwift {
         public func getCurrentRequestCount(endpoint: String? = nil) -> Int {
             NetworkThresholdTracker.shared.getCurrentRequestCount(endpoint: endpoint)
         }
+
+        /// Read the threshold settings and activity shown by the debugger.
+        public func getThresholdSnapshot() -> DebugSwiftThresholdSnapshot {
+            let tracker = NetworkThresholdTracker.shared
+            let config = tracker.getConfig()
+            let endpoints = tracker.getEndpointThresholds().map { endpoint, value in
+                DebugSwiftThresholdEndpointSnapshot(
+                    endpoint: endpoint,
+                    limit: value.limit,
+                    timeWindow: value.timeWindow
+                )
+            }.sorted { $0.endpoint < $1.endpoint }
+            let breachHistory = tracker.getBreachHistory()
+            let breaches = breachHistory.suffix(5).reversed().map {
+                DebugSwiftThresholdBreachSnapshot(timestamp: $0.timestamp, message: $0.message)
+            }
+            return DebugSwiftThresholdSnapshot(
+                isEnabled: config.isEnabled,
+                limit: config.limit,
+                timeWindow: config.timeWindow,
+                shouldBlockRequests: config.shouldBlockRequests,
+                currentRequestCount: tracker.getCurrentRequestCount(),
+                totalBreaches: breachHistory.count,
+                endpointLimits: endpoints,
+                recentBreaches: Array(breaches)
+            )
+        }
         
         /// Get breach history
         public func getBreachHistory() -> [NetworkThresholdTracker.ThresholdBreach] {
@@ -97,6 +177,12 @@ extension DebugSwift {
         /// Get detailed threshold logs
         public func getThresholdLogs() -> String {
             NetworkThresholdTracker.shared.getDetailedLogs()
+        }
+
+        /// Share the current request threshold report as a text file.
+        @MainActor
+        public func exportThresholdLogs() {
+            FileSharingManager.generateFileAndShare(text: getThresholdLogs(), fileName: "request-thresholds")
         }
         
         // MARK: - Network Injection API

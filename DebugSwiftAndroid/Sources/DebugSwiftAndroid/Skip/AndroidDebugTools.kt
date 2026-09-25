@@ -80,6 +80,7 @@ object AndroidDebugTools {
     private const val NOTIFICATION_CHANNEL = "debugswift_local_tests"
     private const val PUSH_HISTORY_PAGE_SIZE = 20
     private const val PUSH_STATE_PREFS = "DebugSwift.PushNotifications"
+    private const val THRESHOLD_STATE_PREFS = "DebugSwift.NetworkThreshold"
     private const val PUSH_NOTIFICATION_ID_EXTRA = "debugswift_notification_id"
     private const val AGENT_LOG_FILENAME = "agent-debug.ndjson"
     private const val MAX_AGENT_LOG_BYTES = 5L * 1024L * 1024L
@@ -151,11 +152,27 @@ object AndroidDebugTools {
     @Volatile private var pushHistoryPage = 1
     @Volatile private var androidNotificationsEnabled = true
     @Volatile private var androidNotificationSettingsLoaded = false
-    private var thresholdLimit = 0
+    @Volatile private var thresholdTrackingEnabled = false
+    private var thresholdLimit = 1000
     private var thresholdWindowMs = 60_000L
     private var thresholdStartMs = 0L
     private var thresholdCount = 0
     @Volatile private var thresholdBlockRequests = false
+    @Volatile private var thresholdAlertEmoji = "⚠️"
+    @Volatile private var thresholdAlertMessage = "Request limit exceeded!"
+    private data class EndpointThresholdLimit(val limit: Int, val windowMs: Long)
+    private data class EndpointThresholdCount(val timestamps: java.util.ArrayDeque<Long> = java.util.ArrayDeque())
+    private data class ThresholdBreachRecord(
+        val timestampMs: Long,
+        val requestCount: Int,
+        val limit: Int,
+        val endpoint: String,
+        val message: String
+    )
+    private val endpointThresholdLimits = ConcurrentHashMap<String, EndpointThresholdLimit>()
+    private val endpointThresholdCounts = ConcurrentHashMap<String, EndpointThresholdCount>()
+    private val thresholdRequestTimes = java.util.ArrayDeque<Long>()
+    private val thresholdBreaches = CopyOnWriteArrayList<ThresholdBreachRecord>()
     @Volatile private var networkFilter = ""
     @Volatile private var networkInjectionEnabled = true
     @Volatile private var requestDelayMs = 0L
@@ -251,6 +268,7 @@ object AndroidDebugTools {
         val applicationContext = context.applicationContext
         if (appContext === applicationContext) return
         appContext = applicationContext
+        loadThresholdSettings(applicationContext)
         loadPushState(applicationContext)
         restoreAppearanceOverride(applicationContext)
         loadNetworkHistory(applicationContext)
@@ -463,6 +481,15 @@ object AndroidDebugTools {
                     else { setRequestThreshold(limit, window); "Request threshold set to $limit per ${window}s." }
                 }
             }
+            "set_threshold_tracking" -> value.toBooleanStrictOrNull()?.let {
+                setRequestTracking(it)
+                "Request tracking ${if (it) "enabled" else "disabled"}."
+            } ?: "Set request tracking to true or false."
+            "set_threshold_blocking" -> value.toBooleanStrictOrNull()?.let {
+                setThresholdBlocking(it)
+                "Request blocking ${if (it) "enabled" else "disabled"}."
+            } ?: "Set request blocking to true or false."
+            "clear_threshold_history" -> clearThresholdHistory()
             "filter_requests" -> {
                 networkFilter = value.trim()
                 networkSnapshot(featureID)
@@ -660,17 +687,7 @@ object AndroidDebugTools {
                 "error" to error
             )
         )
-        val now = SystemClock.elapsedRealtime()
-        synchronized(this) {
-            if (thresholdStartMs == 0L || now - thresholdStartMs > thresholdWindowMs) {
-                thresholdStartMs = now
-                thresholdCount = 0
-            }
-            thresholdCount++
-            if (thresholdLimit > 0 && thresholdCount > thresholdLimit) {
-                publishEvent("network", "Request threshold exceeded: $thresholdCount / $thresholdLimit")
-            }
-        }
+        recordThresholdRequest(url)
         publishEvent("network", "$method $url ($status, ${durationMs}ms)")
     }
 
@@ -692,18 +709,225 @@ object AndroidDebugTools {
 
     fun setRequestThreshold(limit: Int, windowSeconds: Int) {
         synchronized(this) {
-            thresholdLimit = limit.coerceAtLeast(0)
+            thresholdLimit = limit.coerceIn(1, 1000)
             thresholdWindowMs = windowSeconds.coerceAtLeast(1) * 1000L
+            thresholdCount = thresholdRequestTimes.count { SystemClock.elapsedRealtime() - it <= thresholdWindowMs }
+        }
+        persistThresholdSettings()
+    }
+
+    @JvmStatic
+    fun setRequestTracking(enabled: Boolean) {
+        synchronized(this) {
+            thresholdTrackingEnabled = enabled
             thresholdStartMs = SystemClock.elapsedRealtime()
             thresholdCount = 0
+            endpointThresholdCounts.clear()
+            thresholdRequestTimes.clear()
         }
+        persistThresholdSettings()
+    }
+
+    @JvmStatic
+    fun setThresholdBlocking(enabled: Boolean) {
+        thresholdBlockRequests = enabled
+        persistThresholdSettings()
+    }
+
+    @JvmStatic
+    fun setThresholdAlert(emoji: String, message: String) {
+        thresholdAlertEmoji = emoji
+        thresholdAlertMessage = message
+        persistThresholdSettings()
+    }
+
+    @JvmStatic
+    fun setEndpointRequestThreshold(endpoint: String, limit: Int, windowSeconds: Int) {
+        if (endpoint.isBlank() || limit <= 0 || windowSeconds <= 0) return
+        endpointThresholdLimits[endpoint] = EndpointThresholdLimit(limit, windowSeconds * 1000L)
+        persistThresholdSettings()
+    }
+
+    @JvmStatic
+    fun removeEndpointRequestThreshold(endpoint: String) {
+        endpointThresholdLimits.remove(endpoint)
+        endpointThresholdCounts.remove(endpoint)
+        persistThresholdSettings()
+    }
+
+    @JvmStatic
+    fun clearThresholdHistory(): String {
+        synchronized(this) {
+            thresholdStartMs = SystemClock.elapsedRealtime()
+            thresholdCount = 0
+            endpointThresholdCounts.clear()
+            thresholdRequestTimes.clear()
+        }
+        thresholdBreaches.clear()
+        publishEvent("network", "Request threshold history cleared")
+        return "Request threshold history cleared."
+    }
+
+    private fun thresholdSnapshot(): String {
+        val state = synchronized(this) {
+            val now = SystemClock.elapsedRealtime()
+            val count = if (thresholdTrackingEnabled) thresholdRequestTimes.count { now - it <= thresholdWindowMs } else 0
+            thresholdCount = count
+            listOf(thresholdTrackingEnabled, thresholdLimit, thresholdWindowMs / 1000L, thresholdBlockRequests, count, thresholdBreaches.size)
+        }
+        val endpoints = endpointThresholdLimits.entries.sortedBy { it.key }.joinToString("\n") { (endpoint, config) ->
+            "$endpoint — ${config.limit} per ${config.windowMs / 1000L}s"
+        }.ifEmpty { "No endpoint limits configured." }
+        val breaches = thresholdBreaches.takeLast(5).asReversed().joinToString("\n") { breach ->
+            "${Date(breach.timestampMs)} · ${breach.message}"
+        }.ifEmpty { "No threshold breaches." }
+        return "threshold|${state[0]}|${state[1]}|${state[2]}|${state[3]}|${state[4]}|${state[5]}\n" +
+            "ENDPOINT LIMITS\n$endpoints\n\nRECENT BREACHES\n$breaches"
+    }
+
+    @JvmStatic
+    fun getCurrentRequestCount(endpoint: String? = null): Int = synchronized(this) {
+        val now = SystemClock.elapsedRealtime()
+        val window = endpoint?.let { endpointThresholdLimits[it]?.windowMs } ?: thresholdWindowMs
+        if (endpoint == null) {
+            thresholdRequestTimes.count { now - it <= window }
+        } else {
+            endpointThresholdCounts[endpoint]?.timestamps?.count { now - it <= window } ?: 0
+        }
+    }
+
+    @JvmStatic
+    fun getThresholdLogs(): String {
+        val config = synchronized(this) {
+            val now = SystemClock.elapsedRealtime()
+            thresholdCount = thresholdRequestTimes.count { now - it <= thresholdWindowMs }
+            listOf(thresholdLimit, thresholdWindowMs / 1000L, thresholdTrackingEnabled, thresholdBlockRequests, thresholdCount)
+        }
+        val endpoints = endpointThresholdLimits.entries.sortedBy { it.key }.joinToString("\n") { (endpoint, value) ->
+            "- $endpoint: ${value.limit} per ${value.windowMs / 1000L}s"
+        }
+        val breaches = thresholdBreaches.takeLast(10).joinToString("\n") { breach ->
+            "- ${Date(breach.timestampMs)}: ${breach.message}"
+        }
+        return buildString {
+            append("=== Network Request Threshold Logs ===\n\n")
+            append("Configuration:\n")
+            append("- Global Threshold: ${config[0]} requests per ${config[1]}s\n")
+            append("- Tracking Enabled: ${config[2]}\n")
+            append("- Request Blocking: ${config[3]}\n\n")
+            append("Endpoint Thresholds:\n")
+            if (endpoints.isNotEmpty()) append(endpoints).append('\n')
+            append("\nCurrent Request Count: ${config[4]}\n\n")
+            append("Breach History:\n")
+            if (breaches.isNotEmpty()) append(breaches).append('\n')
+        }
+    }
+
+    private fun recordThresholdRequest(url: String) {
+        val now = SystemClock.elapsedRealtime()
+        val endpoint = thresholdEndpoint(url)
+        var breach: ThresholdBreachRecord? = null
+        synchronized(this) {
+            if (!thresholdTrackingEnabled) return
+            if (thresholdStartMs == 0L || now - thresholdStartMs > thresholdWindowMs) {
+                thresholdStartMs = now
+            }
+            thresholdRequestTimes.addLast(now)
+            while (thresholdRequestTimes.isNotEmpty() && now - thresholdRequestTimes.peekFirst() > maxOf(thresholdWindowMs, 300_000L)) {
+                thresholdRequestTimes.removeFirst()
+            }
+            thresholdCount = thresholdRequestTimes.count { now - it <= thresholdWindowMs }
+
+            val endpointCounter = endpointThresholdCounts.computeIfAbsent(endpoint) { EndpointThresholdCount() }
+            endpointCounter.timestamps.addLast(now)
+            val endpointWindow = maxOf(endpointThresholdLimits[endpoint]?.windowMs ?: 0L, thresholdWindowMs, 300_000L)
+            while (endpointCounter.timestamps.isNotEmpty() && now - endpointCounter.timestamps.peekFirst() > endpointWindow) {
+                endpointCounter.timestamps.removeFirst()
+            }
+
+            val endpointLimit = endpointThresholdLimits[endpoint]
+            val effectiveCount: Int
+            val effectiveLimit: Int
+            if (endpointLimit != null) {
+                effectiveCount = endpointCounter.timestamps.count { now - it <= endpointLimit.windowMs }
+                effectiveLimit = endpointLimit.limit
+            } else {
+                effectiveCount = thresholdCount
+                effectiveLimit = thresholdLimit
+            }
+            if (effectiveCount > effectiveLimit) {
+                val emoji = if (endpointLimit == null) thresholdAlertEmoji else "⚠️"
+                val text = if (endpointLimit == null) thresholdAlertMessage else "Request limit exceeded!"
+                val message = "$emoji $text ($effectiveCount/$effectiveLimit)"
+                breach = ThresholdBreachRecord(now, effectiveCount, effectiveLimit, endpoint, message)
+                thresholdBreaches.add(breach!!)
+                while (thresholdBreaches.size > 1000) thresholdBreaches.removeAt(0)
+            }
+        }
+        breach?.let { publishEvent("network", it.message) }
+    }
+
+    private fun thresholdEndpoint(url: String): String {
+        val parsed = Uri.parse(url)
+        val components = parsed.pathSegments.filter { it.isNotBlank() }
+        return components.take(2).joinToString("/").ifEmpty { parsed.host ?: "unknown" }
+    }
+
+    private fun loadThresholdSettings(context: Context) {
+        val prefs = context.getSharedPreferences(THRESHOLD_STATE_PREFS, Context.MODE_PRIVATE)
+        thresholdLimit = prefs.getInt("limit", 1000)
+        thresholdWindowMs = prefs.getLong("window_ms", 60_000L).coerceAtLeast(1_000L)
+        thresholdTrackingEnabled = prefs.getBoolean("tracking_enabled", false)
+        thresholdBlockRequests = prefs.getBoolean("block_requests", false)
+        thresholdAlertEmoji = prefs.getString("alert_emoji", "⚠️") ?: "⚠️"
+        thresholdAlertMessage = prefs.getString("alert_message", "Request limit exceeded!") ?: "Request limit exceeded!"
+        val endpoints = runCatching { JSONArray(prefs.getString("endpoint_limits", "[]")) }.getOrNull()
+        endpointThresholdLimits.clear()
+        if (endpoints != null) {
+            for (index in 0 until endpoints.length()) {
+                val endpoint = endpoints.optJSONObject(index) ?: continue
+                val name = endpoint.optString("endpoint").takeIf { it.isNotBlank() } ?: continue
+                val limit = endpoint.optInt("limit", 0).takeIf { it > 0 } ?: continue
+                val windowMs = endpoint.optLong("windowMs", 60_000L).coerceAtLeast(1_000L)
+                endpointThresholdLimits[name] = EndpointThresholdLimit(limit, windowMs)
+            }
+        }
+        if (thresholdTrackingEnabled) thresholdStartMs = SystemClock.elapsedRealtime()
+    }
+
+    private fun persistThresholdSettings() {
+        val context = appContext ?: return
+        val endpoints = JSONArray()
+        endpointThresholdLimits.entries.sortedBy { it.key }.forEach { (name, config) ->
+            endpoints.put(JSONObject().put("endpoint", name).put("limit", config.limit).put("windowMs", config.windowMs))
+        }
+        context.getSharedPreferences(THRESHOLD_STATE_PREFS, Context.MODE_PRIVATE).edit()
+            .putInt("limit", thresholdLimit)
+            .putLong("window_ms", thresholdWindowMs)
+            .putBoolean("tracking_enabled", thresholdTrackingEnabled)
+            .putBoolean("block_requests", thresholdBlockRequests)
+            .putString("alert_emoji", thresholdAlertEmoji)
+            .putString("alert_message", thresholdAlertMessage)
+            .putString("endpoint_limits", endpoints.toString())
+            .apply()
     }
 
     fun shouldBlock(url: String): Boolean {
         if (networkInjectionEnabled && blockedURLPatterns.any { it.containsMatchIn(url) }) return true
         return synchronized(this) {
-            thresholdBlockRequests && thresholdLimit > 0 && thresholdCount >= thresholdLimit &&
-                thresholdStartMs != 0L && SystemClock.elapsedRealtime() - thresholdStartMs <= thresholdWindowMs
+            if (!thresholdTrackingEnabled || !thresholdBlockRequests) return@synchronized false
+            val endpoint = thresholdEndpoint(url)
+            val endpointLimit = endpointThresholdLimits[endpoint]
+            val endpointCounter = endpointThresholdCounts[endpoint]
+            val now = SystemClock.elapsedRealtime()
+            val window = endpointLimit?.windowMs ?: thresholdWindowMs
+            val count = if (endpointLimit != null) {
+                endpointCounter?.timestamps?.count { now - it <= window } ?: 0
+            } else {
+                thresholdRequestTimes.count { now - it <= window }
+            }
+            val limit = endpointLimit?.limit ?: thresholdLimit
+            limit > 0 && count >= limit
         }
     }
 
@@ -1116,7 +1340,7 @@ object AndroidDebugTools {
             return "Injection enabled: $networkInjectionEnabled\nDelay: ${requestDelayMs}ms\nFail next request: ${failNextRequest.get()}\nHTTP error: ${httpErrorCode.takeIf { it != 0 } ?: "off"}\nResponse rewrites: ${responseRewrites.size}\nBlocked URL patterns: ${blockedURLPatterns.size}"
         }
         if (featureID == "network_thresholds") {
-            return "Requests in window: $thresholdCount\nLimit: ${thresholdLimit.takeIf { it > 0 } ?: "off"}\nWindow: ${thresholdWindowMs / 1000}s\nBlock after limit: $thresholdBlockRequests"
+            return thresholdSnapshot()
         }
         if (featureID == "websocket") {
             return webSocketSnapshot()
@@ -1690,7 +1914,12 @@ object AndroidDebugTools {
                 networkRecords.clear()
                 clearWebSocketHistory()
                 networkFilter = ""
-                synchronized(this) { thresholdCount = 0; thresholdStartMs = SystemClock.elapsedRealtime() }
+                synchronized(this) {
+                    thresholdCount = 0
+                    thresholdStartMs = SystemClock.elapsedRealtime()
+                    thresholdRequestTimes.clear()
+                    endpointThresholdCounts.clear()
+                }
                 persistNetworkHistory()
                 publishEvent("network", "Network history cleared")
                 return "Network and WebSocket history cleared."
@@ -1771,7 +2000,7 @@ object AndroidDebugTools {
                 agentLogEnabled = true
             }
             "thread_checker" -> if (enabled) enableStrictMode() else disableStrictMode()
-            "network_thresholds" -> thresholdBlockRequests = enabled
+            "network_thresholds" -> setThresholdBlocking(enabled)
             "network_injection" -> {
                 networkInjectionEnabled = enabled
                 if (!enabled) clearInjectionRules()
@@ -1793,6 +2022,7 @@ object AndroidDebugTools {
             "realm" -> File(context.cacheDir, "debugswift-realm-${System.currentTimeMillis()}.txt").apply { writeText(snapshot(featureID)) }
             "console" -> File(context.cacheDir, "debugswift-console-${System.currentTimeMillis()}.txt").apply { writeText(consoleRecords.joinToString("\n")) }
             "oslog_console" -> File(context.cacheDir, "debugswift-logcat-${System.currentTimeMillis()}.txt").apply { writeText(logcatSnapshot()) }
+            "network_thresholds" -> File(context.cacheDir, "debugswift-network-thresholds-${System.currentTimeMillis()}.txt").apply { writeText(getThresholdLogs()) }
             "agent_debug_log" -> File(context.filesDir, AGENT_LOG_FILENAME).takeIf { it.exists() }
             "crashes" -> File(context.cacheDir, "debugswift-crashes-${System.currentTimeMillis()}.txt").apply { writeText(crashRecords.joinToString("\n\n")) }
             "files" -> exportCurrentFile(context)
