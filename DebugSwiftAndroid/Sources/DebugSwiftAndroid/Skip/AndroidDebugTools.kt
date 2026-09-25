@@ -1289,6 +1289,8 @@ object AndroidDebugTools {
             "graphql" -> exportHar("graphql")
             "websocket" -> exportWebSockets(context)
             "har_export", "network_history" -> exportHar()
+            "backtraces" -> File(context.cacheDir, "debugswift-backtraces-${System.currentTimeMillis()}.txt").apply { writeText(backtraces.joinToString("\n\n")) }
+            "event_bus" -> File(context.cacheDir, "debugswift-events-${System.currentTimeMillis()}.txt").apply { writeText(events.joinToString("\n")) }
             "realm" -> File(context.cacheDir, "debugswift-realm-${System.currentTimeMillis()}.txt").apply { writeText(snapshot(featureID)) }
             "console" -> File(context.cacheDir, "debugswift-console-${System.currentTimeMillis()}.txt").apply { writeText(consoleRecords.joinToString("\n")) }
             "oslog_console" -> File(context.cacheDir, "debugswift-logcat-${System.currentTimeMillis()}.txt").apply { writeText(logcatSnapshot()) }
