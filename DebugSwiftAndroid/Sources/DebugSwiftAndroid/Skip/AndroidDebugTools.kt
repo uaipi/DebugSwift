@@ -51,6 +51,7 @@ import java.util.UUID
 import java.util.zip.ZipFile
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
@@ -89,6 +90,7 @@ object AndroidDebugTools {
     private const val PUSH_HISTORY_PAGE_SIZE = 20
     private const val PUSH_STATE_PREFS = "DebugSwift.PushNotifications"
     private const val THRESHOLD_STATE_PREFS = "DebugSwift.NetworkThreshold"
+    private const val NETWORK_INJECTION_STATE_PREFS = "DebugSwift.NetworkInjection"
     private const val PUSH_NOTIFICATION_ID_EXTRA = "debugswift_notification_id"
     private const val AGENT_LOG_FILENAME = "agent-debug.ndjson"
     private const val MAX_AGENT_LOG_BYTES = 5L * 1024L * 1024L
@@ -189,6 +191,61 @@ object AndroidDebugTools {
     private val responseRewrites = CopyOnWriteArrayList<Pair<Regex, String>>()
     private val blockedURLPatterns = CopyOnWriteArrayList<Regex>()
 
+    data class NetworkRewriteRule(
+        val id: String,
+        val urlPattern: String,
+        val responseBody: String,
+        val responseStatusCode: Int?,
+        val httpMethod: String?,
+        val isEnabled: Boolean,
+        val matchType: String
+    )
+
+    data class NetworkFailure(
+        val failureType: String,
+        val statusCode: Int? = null,
+        val customDomain: String = "",
+        val customCode: Int = 0,
+        val customDescription: String = ""
+    )
+
+    private data class DelayInjectionSettings(
+        val isEnabled: Boolean = false,
+        val fixedDelay: Double? = null,
+        val minDelay: Double = 1.0,
+        val maxDelay: Double = 3.0,
+        val urlPatterns: List<String> = emptyList(),
+        val httpMethods: List<String> = emptyList()
+    )
+
+    private data class FailureInjectionSettings(
+        val isEnabled: Boolean = false,
+        val failureRate: Double = 0.5,
+        val failureType: String = "timeout",
+        val customStatusCodes: List<Int> = listOf(400, 401, 403, 404, 500, 502, 503),
+        val urlPatterns: List<String> = emptyList(),
+        val httpMethods: List<String> = emptyList(),
+        val customDomain: String = "DebugSwift.CustomNetworkError",
+        val customCode: Int = -1,
+        val customDescription: String = "Injected custom network error."
+    )
+
+    private data class RewriteInjectionSettings(
+        val isEnabled: Boolean = false,
+        val rules: List<NetworkRewriteRule> = emptyList(),
+        val autoEnableOnRun: Boolean = false,
+        val shortCircuitEnabled: Boolean = true,
+        val multipleMatchEnabled: Boolean = false
+    )
+
+    private data class NetworkInjectionSettings(
+        val delay: DelayInjectionSettings = DelayInjectionSettings(),
+        val failure: FailureInjectionSettings = FailureInjectionSettings(),
+        val rewrite: RewriteInjectionSettings = RewriteInjectionSettings()
+    )
+
+    @Volatile private var networkInjectionSettings = NetworkInjectionSettings()
+
     data class NetworkRecord(
         val timestamp: Long,
         val method: String,
@@ -280,6 +337,7 @@ object AndroidDebugTools {
         if (appContext === applicationContext) return
         appContext = applicationContext
         loadThresholdSettings(applicationContext)
+        loadNetworkInjectionSettings(applicationContext)
         loadPushState(applicationContext)
         restoreAppearanceOverride(applicationContext)
         loadNetworkHistory(applicationContext)
@@ -722,6 +780,11 @@ object AndroidDebugTools {
 
     fun setRequestDelay(milliseconds: Long) {
         requestDelayMs = milliseconds.coerceIn(0L, 60_000L)
+        val current = networkInjectionSettings
+        networkInjectionSettings = current.copy(delay = current.delay.copy(
+            isEnabled = requestDelayMs > 0,
+            fixedDelay = requestDelayMs / 1_000.0
+        ))
     }
 
     fun failNextNetworkRequest() {
@@ -730,11 +793,274 @@ object AndroidDebugTools {
 
     fun setHTTPErrorInjection(statusCode: Int) {
         httpErrorCode = if (statusCode in 400..599) statusCode else 0
+        val current = networkInjectionSettings
+        networkInjectionSettings = current.copy(failure = current.failure.copy(
+            isEnabled = httpErrorCode != 0,
+            failureRate = 1.0,
+            failureType = "httpError",
+            customStatusCodes = listOfNotNull(httpErrorCode.takeIf { it != 0 })
+        ))
     }
 
     fun addResponseRewrite(pattern: String, replacement: String) {
+        val current = networkInjectionSettings
+        val rule = NetworkRewriteRule(
+            id = UUID.randomUUID().toString(),
+            urlPattern = pattern,
+            responseBody = replacement,
+            responseStatusCode = null,
+            httpMethod = null,
+            isEnabled = true,
+            matchType = "wildcard"
+        )
+        networkInjectionSettings = current.copy(rewrite = current.rewrite.copy(isEnabled = true, rules = current.rewrite.rules + rule))
         runCatching { responseRewrites.add(Regex(pattern) to replacement) }
     }
+
+    @JvmStatic
+    fun networkInjectionSettingsJSON(): String = networkInjectionSettingsJSONObject(networkInjectionSettings).toString()
+
+    fun exportNetworkInjectionRulesCSV(): String {
+        val context = appContext ?: return "Android runtime has not been installed."
+        val rows = mutableListOf("url_pattern,response_status_code,response_body,http_method")
+        networkInjectionSettings.rewrite.rules.forEach { rule ->
+            rows.add(listOf(
+                csvEscape(rule.urlPattern),
+                csvEscape(rule.responseStatusCode?.toString().orEmpty()),
+                csvEscape(rule.responseBody),
+                csvEscape(rule.httpMethod.orEmpty())
+            ).joinToString(","))
+        }
+        val file = File(context.cacheDir, "response_modifier_rules_${System.currentTimeMillis()}.csv")
+        return runCatching {
+            file.writeText(rows.joinToString("\n"), Charsets.UTF_8)
+            shareExport(file, context)
+        }.getOrElse { "Could not export response modifier rules: ${it.message}" }
+    }
+
+    fun importNetworkInjectionRulesCSV(csv: String): String {
+        val (rows, parseError) = parseCSVRows(csv)
+        if (parseError != null) return parseError
+        val header = rows.firstOrNull() ?: return "The CSV file is empty."
+        if (header.map { it.trim().lowercase(Locale.ROOT) } != listOf("url_pattern", "response_status_code", "response_body", "http_method")) {
+            return "Invalid CSV header. Expected: url_pattern,response_status_code,response_body,http_method"
+        }
+        val imported = mutableListOf<NetworkRewriteRule>()
+        rows.drop(1).forEachIndexed { index, row ->
+            val rowNumber = index + 2
+            if (row.all { it.trim().isEmpty() }) return@forEachIndexed
+            if (row.size != 4) return "Row $rowNumber has an invalid number of columns."
+            val pattern = row[0].trim()
+            if (pattern.isEmpty()) return "Row $rowNumber has an empty url_pattern value."
+            val rawStatus = row[1].trim()
+            val status = if (rawStatus.isEmpty()) null else rawStatus.toIntOrNull()?.takeIf { it in 100..599 }
+                ?: return "Row $rowNumber has an invalid response_status_code value."
+            val method = row[3].trim().uppercase(Locale.ROOT).takeIf { value ->
+                value in setOf("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS")
+            }
+            imported.add(NetworkRewriteRule(
+                id = UUID.randomUUID().toString(),
+                urlPattern = pattern,
+                responseBody = row[2],
+                responseStatusCode = status,
+                httpMethod = method,
+                isEnabled = true,
+                matchType = if (pattern.contains('*') || pattern.contains('?')) "wildcard" else "exact"
+            ))
+        }
+        val current = networkInjectionSettings
+        val rules = current.rewrite.rules.toMutableList()
+        var created = 0
+        var updated = 0
+        imported.forEach { incoming ->
+            val existingIndex = rules.indexOfFirst { it.urlPattern == incoming.urlPattern && it.httpMethod == incoming.httpMethod }
+            if (existingIndex >= 0) {
+                rules[existingIndex] = rules[existingIndex].copy(
+                    responseBody = incoming.responseBody,
+                    responseStatusCode = incoming.responseStatusCode,
+                    httpMethod = incoming.httpMethod
+                )
+                updated += 1
+            } else {
+                rules.add(incoming)
+                created += 1
+            }
+        }
+        networkInjectionSettings = current.copy(rewrite = current.rewrite.copy(rules = rules))
+        appContext?.getSharedPreferences(NETWORK_INJECTION_STATE_PREFS, Context.MODE_PRIVATE)?.edit()
+            ?.putString("settings", networkInjectionSettingsJSONObject(networkInjectionSettings).toString())
+            ?.apply()
+        return "Imported $created new rule(s) and updated $updated existing rule(s)."
+    }
+
+    private fun csvEscape(value: String): String = if (value.any { it == ',' || it == '"' || it == '\n' || it == '\r' }) {
+        "\"${value.replace("\"", "\"\"")}\""
+    } else value
+
+    private fun parseCSVRows(text: String): Pair<List<List<String>>, String?> {
+        val rows = mutableListOf<List<String>>()
+        var row = mutableListOf<String>()
+        val field = StringBuilder()
+        var inQuotes = false
+        var didCloseQuotedField = false
+        var rowNumber = 1
+        var index = 0
+        while (index < text.length) {
+            val character = text[index]
+            when {
+                character == '"' && inQuotes && index + 1 < text.length && text[index + 1] == '"' -> {
+                    field.append('"')
+                    index += 1
+                }
+                character == '"' && inQuotes -> {
+                    inQuotes = false
+                    didCloseQuotedField = true
+                }
+                character == '"' && !inQuotes && field.isEmpty() -> inQuotes = true
+                character == '"' -> return rows to "Row $rowNumber has invalid CSV format."
+                character == ',' && !inQuotes -> {
+                    row.add(field.toString())
+                    field.setLength(0)
+                    didCloseQuotedField = false
+                }
+                (character == '\n' || character == '\r') && !inQuotes -> {
+                    row.add(field.toString())
+                    rows.add(row)
+                    row = mutableListOf()
+                    field.setLength(0)
+                    didCloseQuotedField = false
+                    rowNumber += 1
+                    if (character == '\r' && index + 1 < text.length && text[index + 1] == '\n') index += 1
+                }
+                !inQuotes && didCloseQuotedField && !character.isWhitespace() -> return rows to "Row $rowNumber has invalid CSV format."
+                !didCloseQuotedField -> field.append(character)
+            }
+            index += 1
+        }
+        if (inQuotes) return rows to "Row $rowNumber has invalid CSV format."
+        if (field.isNotEmpty() || row.isNotEmpty()) {
+            row.add(field.toString())
+            rows.add(row)
+        }
+        return rows to null
+    }
+
+    @JvmStatic
+    fun applyNetworkInjectionSettingsJSON(json: String): String {
+        val parsed = runCatching { JSONObject(json) }.getOrElse {
+            return "Settings are not valid JSON: ${it.message}"
+        }
+        val delayJSON = parsed.optJSONObject("delay") ?: JSONObject()
+        val failureJSON = parsed.optJSONObject("failure") ?: JSONObject()
+        val rewriteJSON = parsed.optJSONObject("rewrite") ?: JSONObject()
+        val delay = DelayInjectionSettings(
+            isEnabled = delayJSON.optBoolean("isEnabled", false),
+            fixedDelay = if (delayJSON.isNull("fixedDelay")) null else delayJSON.optDouble("fixedDelay", 1.0).coerceIn(0.0, 60.0),
+            minDelay = delayJSON.optDouble("minDelay", 1.0).coerceIn(0.0, 60.0),
+            maxDelay = delayJSON.optDouble("maxDelay", 3.0).coerceIn(delayJSON.optDouble("minDelay", 1.0).coerceIn(0.0, 60.0), 60.0),
+            urlPatterns = jsonStringArray(delayJSON.optJSONArray("urlPatterns")),
+            httpMethods = jsonStringArray(delayJSON.optJSONArray("httpMethods")).map { it.uppercase(Locale.ROOT) }.distinct()
+        )
+        val statusCodes = jsonIntArray(failureJSON.optJSONArray("customStatusCodes")).filter { it in 400..599 }.distinct()
+        val failure = FailureInjectionSettings(
+            isEnabled = failureJSON.optBoolean("isEnabled", false),
+            failureRate = failureJSON.optDouble("failureRate", 0.5).coerceIn(0.0, 1.0),
+            failureType = failureJSON.optString("failureType", "timeout"),
+            customStatusCodes = statusCodes.ifEmpty { listOf(500) },
+            urlPatterns = jsonStringArray(failureJSON.optJSONArray("urlPatterns")),
+            httpMethods = jsonStringArray(failureJSON.optJSONArray("httpMethods")).map { it.uppercase(Locale.ROOT) }.distinct(),
+            customDomain = failureJSON.optString("customDomain", "DebugSwift.CustomNetworkError"),
+            customCode = failureJSON.optInt("customCode", -1),
+            customDescription = failureJSON.optString("customDescription", "Injected custom network error.")
+        )
+        val rulesJSON = rewriteJSON.optJSONArray("rules") ?: JSONArray()
+        val rules = (0 until rulesJSON.length()).mapNotNull { index ->
+            val ruleJSON = rulesJSON.optJSONObject(index) ?: return@mapNotNull null
+            val pattern = ruleJSON.optString("urlPattern", "").trim()
+            if (pattern.isEmpty()) return@mapNotNull null
+            val status = if (ruleJSON.isNull("responseStatusCode")) null else ruleJSON.optInt("responseStatusCode").takeIf { it in 100..599 }
+            val method = ruleJSON.optString("httpMethod", "").uppercase(Locale.ROOT).takeIf { it.isNotEmpty() }
+            NetworkRewriteRule(
+                id = ruleJSON.optString("id", UUID.randomUUID().toString()),
+                urlPattern = pattern,
+                responseBody = ruleJSON.optString("responseBody", ""),
+                responseStatusCode = status,
+                httpMethod = method,
+                isEnabled = ruleJSON.optBoolean("isEnabled", true),
+                matchType = if (pattern.contains('*') || pattern.contains('?')) "wildcard" else "exact"
+            )
+        }
+        val rewrite = RewriteInjectionSettings(
+            isEnabled = rewriteJSON.optBoolean("isEnabled", false),
+            rules = rules,
+            autoEnableOnRun = rewriteJSON.optBoolean("autoEnableOnRun", false),
+            shortCircuitEnabled = rewriteJSON.optBoolean("shortCircuitEnabled", true),
+            multipleMatchEnabled = rewriteJSON.optBoolean("multipleMatchEnabled", false)
+        )
+        val settings = NetworkInjectionSettings(delay, failure, rewrite)
+        networkInjectionSettings = settings
+        requestDelayMs = 0L
+        httpErrorCode = 0
+        responseRewrites.clear()
+        failNextRequest.set(false)
+        appContext?.getSharedPreferences(NETWORK_INJECTION_STATE_PREFS, Context.MODE_PRIVATE)?.edit()
+            ?.putString("settings", networkInjectionSettingsJSONObject(settings).toString())
+            ?.apply()
+        return "Network injection settings applied."
+    }
+
+    private fun loadNetworkInjectionSettings(context: Context) {
+        val json = context.getSharedPreferences(NETWORK_INJECTION_STATE_PREFS, Context.MODE_PRIVATE)
+            .getString("settings", null) ?: return
+        applyNetworkInjectionSettingsJSON(json)
+    }
+
+    private fun networkInjectionSettingsJSONObject(settings: NetworkInjectionSettings): JSONObject {
+        val delay = settings.delay
+        val failure = settings.failure
+        val rewrite = settings.rewrite
+        val delayJSON = JSONObject()
+            .put("isEnabled", delay.isEnabled)
+            .put("fixedDelay", delay.fixedDelay ?: JSONObject.NULL)
+            .put("minDelay", delay.minDelay)
+            .put("maxDelay", delay.maxDelay)
+            .put("urlPatterns", JSONArray(delay.urlPatterns))
+            .put("httpMethods", JSONArray(delay.httpMethods))
+        val failureJSON = JSONObject()
+            .put("isEnabled", failure.isEnabled)
+            .put("failureRate", failure.failureRate)
+            .put("failureType", failure.failureType)
+            .put("customStatusCodes", JSONArray(failure.customStatusCodes))
+            .put("urlPatterns", JSONArray(failure.urlPatterns))
+            .put("httpMethods", JSONArray(failure.httpMethods))
+            .put("customDomain", failure.customDomain)
+            .put("customCode", failure.customCode)
+            .put("customDescription", failure.customDescription)
+        val rules = JSONArray()
+        rewrite.rules.forEach { rule ->
+            rules.put(JSONObject()
+                .put("id", rule.id)
+                .put("urlPattern", rule.urlPattern)
+                .put("responseBody", rule.responseBody)
+                .put("responseStatusCode", rule.responseStatusCode ?: JSONObject.NULL)
+                .put("httpMethod", rule.httpMethod ?: JSONObject.NULL)
+                .put("isEnabled", rule.isEnabled)
+                .put("matchType", rule.matchType))
+        }
+        val rewriteJSON = JSONObject()
+            .put("isEnabled", rewrite.isEnabled)
+            .put("rules", rules)
+            .put("autoEnableOnRun", rewrite.autoEnableOnRun)
+            .put("shortCircuitEnabled", rewrite.shortCircuitEnabled)
+            .put("multipleMatchEnabled", rewrite.multipleMatchEnabled)
+        return JSONObject().put("delay", delayJSON).put("failure", failureJSON).put("rewrite", rewriteJSON)
+    }
+
+    private fun jsonStringArray(array: JSONArray?): List<String> = if (array == null) emptyList() else
+        (0 until array.length()).mapNotNull { array.optString(it).takeIf(String::isNotBlank) }
+
+    private fun jsonIntArray(array: JSONArray?): List<Int> = if (array == null) emptyList() else
+        (0 until array.length()).mapNotNull { index -> array.optInt(index).takeIf { !array.isNull(index) } }
 
     fun setRequestThreshold(limit: Int, windowSeconds: Int) {
         synchronized(this) {
@@ -962,19 +1288,164 @@ object AndroidDebugTools {
 
     fun requestDelay(): Long = requestDelayMs.takeIf { networkInjectionEnabled } ?: 0L
 
+    fun requestDelay(url: String, method: String): Long {
+        if (!networkInjectionEnabled) return 0L
+        val config = networkInjectionSettings.delay
+        if (!config.isEnabled || !matchesRequest(url, method, config.urlPatterns, config.httpMethods)) {
+            return requestDelayMs.coerceAtLeast(0L)
+        }
+        val seconds = config.fixedDelay ?: run {
+            if (config.maxDelay <= config.minDelay) config.minDelay
+            else config.minDelay + (config.maxDelay - config.minDelay) * kotlin.random.Random.nextDouble()
+        }
+        return (seconds.coerceIn(0.0, 60.0) * 1_000).toLong()
+    }
+
     fun consumeFailure(): Boolean {
         return networkInjectionEnabled && failNextRequest.compareAndSet(true, false)
+    }
+
+    fun consumeNetworkFailure(url: String, method: String): NetworkFailure? {
+        if (!networkInjectionEnabled) return null
+        val config = networkInjectionSettings.failure
+        if (config.isEnabled && matchesRequest(url, method, config.urlPatterns, config.httpMethods) &&
+            kotlin.random.Random.nextDouble() <= config.failureRate) {
+            if (config.failureType == "httpError") {
+                return NetworkFailure(config.failureType, config.customStatusCodes.randomOrNull() ?: 500)
+            }
+            return NetworkFailure(config.failureType, customDomain = config.customDomain, customCode = config.customCode, customDescription = config.customDescription)
+        }
+        if (failNextRequest.compareAndSet(true, false)) return NetworkFailure("timeout")
+        if (httpErrorCode in 400..599) return NetworkFailure("httpError", httpErrorCode)
+        return null
     }
 
     fun injectedHTTPError(): Int = httpErrorCode.takeIf { networkInjectionEnabled } ?: 0
 
     fun rewriteResponse(url: String, body: String): String {
         if (!networkInjectionEnabled) return body
-        var rewritten = body
-        responseRewrites.forEach { (pattern, replacement) ->
-            if (pattern.containsMatchIn(url)) rewritten = replacement
+        return matchingNetworkRewriteRule(url, "GET")?.responseBody ?: body
+    }
+
+    fun matchingNetworkRewriteRule(url: String, method: String): NetworkRewriteRule? {
+        if (!networkInjectionEnabled) return null
+        val rewrite = networkInjectionSettings.rewrite
+        if (!rewrite.isEnabled) {
+            val legacy = responseRewrites.firstOrNull { (pattern, _) -> pattern.containsMatchIn(url) }
+            return legacy?.let { (pattern, replacement) ->
+                NetworkRewriteRule(pattern.toString(), pattern.toString(), replacement, null, null, true, "wildcard")
+            }
         }
-        return rewritten
+        val matches = rewrite.rules.filter { rule ->
+            if (!rule.isEnabled) return@filter false
+            if (!rule.httpMethod.isNullOrEmpty() && !rule.httpMethod.equals(method, ignoreCase = true)) return@filter false
+            when (rule.matchType) {
+                "exact" -> url.equals(rule.urlPattern, ignoreCase = true)
+                else -> matchesWildcardURL(url, rule.urlPattern, full = true, queryExact = true)
+            }
+        }
+        if (matches.isEmpty()) return null
+        if (!rewrite.multipleMatchEnabled || matches.size == 1) return matches.first()
+        return chooseNetworkRewriteRule(matches)
+    }
+
+    private fun chooseNetworkRewriteRule(matches: List<NetworkRewriteRule>): NetworkRewriteRule? {
+        val activity = foregroundActivity.get() ?: return matches.firstOrNull()
+        if (Looper.myLooper() == Looper.getMainLooper()) return matches.firstOrNull()
+        val latch = CountDownLatch(1)
+        var selection: NetworkRewriteRule? = null
+        mainHandler.post {
+            if (activity.isFinishing || (Build.VERSION.SDK_INT >= 17 && activity.isDestroyed)) {
+                latch.countDown()
+            } else {
+                val labels = matches.map { rule ->
+                    "HTTP ${rule.responseStatusCode ?: 200} · ${rule.httpMethod ?: "All methods"} · ${rule.urlPattern}"
+                }.toTypedArray()
+                android.app.AlertDialog.Builder(activity)
+                    .setTitle("Choose Response Modifier Rule")
+                    .setItems(labels) { _, index ->
+                        selection = matches.getOrNull(index)
+                        latch.countDown()
+                    }
+                    .setNegativeButton("No Rewrite") { _, _ -> latch.countDown() }
+                    .setOnCancelListener { latch.countDown() }
+                    .show()
+            }
+        }
+        latch.await(30, TimeUnit.SECONDS)
+        return selection
+    }
+
+    fun shouldShortCircuitResponseRewrite(): Boolean = networkInjectionEnabled && networkInjectionSettings.rewrite.shortCircuitEnabled
+
+    private fun matchesRequest(url: String, method: String, urlPatterns: List<String>, httpMethods: List<String>): Boolean {
+        val methodMatches = httpMethods.isEmpty() || httpMethods.any { it.equals(method, ignoreCase = true) }
+        if (!methodMatches) return false
+        return urlPatterns.isEmpty() || urlPatterns.any { matchesWildcardURL(url, it, full = false, queryExact = false) }
+    }
+
+    private data class QueryPattern(val name: String, val value: String?, val hasValue: Boolean)
+
+    private fun matchesWildcardURL(url: String, pattern: String, full: Boolean, queryExact: Boolean): Boolean {
+        val queryPattern = parseWildcardQuery(pattern)
+        if (queryPattern == null) {
+            val target = if (pattern.contains("?") && pattern.substringAfterLast('?').contains("=")) url else url.substringBefore('#')
+            return matchesWildcardString(target, pattern, full)
+        }
+        val (basePattern, expectedItems) = queryPattern
+        val baseURL = url.substringBefore('#').substringBefore('?')
+        if (!matchesWildcardString(baseURL, basePattern.ifEmpty { "*" }, full)) return false
+        val rawQuery = Uri.parse(url).encodedQuery.orEmpty()
+        val actualItems = if (rawQuery.isEmpty()) emptyList() else rawQuery.split('&').map { item ->
+            val pair = item.split('=', limit = 2)
+            Uri.decode(pair[0]) to pair.getOrNull(1)?.let { Uri.decode(it) }
+        }
+        if (queryExact && actualItems.size != expectedItems.size) return false
+        val used = mutableSetOf<Int>()
+        expectedItems.forEach { expected ->
+            val matchIndex = actualItems.indices.firstOrNull { index ->
+                index !in used && matchesWildcardString(actualItems[index].first, expected.name, full = true) &&
+                    (!expected.hasValue || matchesWildcardString(actualItems[index].second.orEmpty(), expected.value.orEmpty(), full = true))
+            } ?: return false
+            used.add(matchIndex)
+        }
+        return !queryExact || used.size == actualItems.size
+    }
+
+    private fun parseWildcardQuery(pattern: String): Pair<String, List<QueryPattern>>? {
+        val withoutFragment = pattern.substringBefore('#')
+        var searchIndex = 0
+        while (searchIndex < withoutFragment.length) {
+            val questionIndex = withoutFragment.indexOf('?', searchIndex)
+            if (questionIndex < 0) return null
+            val nextQuestion = withoutFragment.indexOf('?', questionIndex + 1).let { if (it < 0) withoutFragment.length else it }
+            val candidate = withoutFragment.substring(questionIndex + 1, nextQuestion)
+            if (candidate.contains('=') || candidate.contains('&') || (candidate.isNotEmpty() && !candidate.contains('/'))) {
+                val items = candidate.split('&').filter(String::isNotEmpty).map { item ->
+                    val equalsIndex = item.indexOf('=')
+                    if (equalsIndex < 0) QueryPattern(Uri.decode(item), null, false)
+                    else QueryPattern(Uri.decode(item.substring(0, equalsIndex)), Uri.decode(item.substring(equalsIndex + 1)), true)
+                }
+                return withoutFragment.substring(0, questionIndex) to items
+            }
+            searchIndex = questionIndex + 1
+        }
+        return null
+    }
+
+    private fun matchesWildcardString(value: String, pattern: String, full: Boolean): Boolean {
+        val expression = buildString {
+            if (full) append('^')
+            pattern.forEach { character ->
+                when (character) {
+                    '*' -> append(".*")
+                    '?' -> append('.')
+                    else -> append(Regex.escape(character.toString()))
+                }
+            }
+            if (full) append('$')
+        }
+        return runCatching { Regex(expression, RegexOption.IGNORE_CASE).containsMatchIn(value) }.getOrDefault(false)
     }
 
     fun webSocketOpened(webSocket: WebSocket, url: String, responseCode: Int) {
@@ -3567,6 +4038,8 @@ object AndroidDebugTools {
         failNextRequest.set(false)
         responseRewrites.clear()
         blockedURLPatterns.clear()
+        networkInjectionSettings = NetworkInjectionSettings()
+        appContext?.getSharedPreferences(NETWORK_INJECTION_STATE_PREFS, Context.MODE_PRIVATE)?.edit()?.remove("settings")?.apply()
     }
 
     private fun publishEvent(domain: String, message: String) {
@@ -3690,6 +4163,12 @@ object AndroidDebugTools {
 object DebugSwiftNetworkConfig {
     val decryptors = CopyOnWriteArrayList<String>()
     private val encryptionKeys = mutableMapOf<String, SecretKey>()
+
+    /** Read the settings currently used by DebugSwiftOkHttpInterceptor. */
+    fun networkInjectionSettingsJSON(): String = AndroidDebugTools.networkInjectionSettingsJSON()
+
+    /** Apply the same JSON configuration edited by the shared Network Injection screen. */
+    fun applyNetworkInjectionSettingsJSON(json: String): String = AndroidDebugTools.applyNetworkInjectionSettingsJSON(json)
 
     fun registerAESKey(urlPattern: String, encodedKey: ByteArray): Boolean {
         if (encodedKey.size !in listOf(16, 24, 32)) {

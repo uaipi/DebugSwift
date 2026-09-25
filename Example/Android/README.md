@@ -1,6 +1,6 @@
 # DebugSwift Android sample
 
-This sample consumes the `DebugSwiftAndroid` product from the main DebugSwift package and renders its SwiftUI panel as native Android Compose UI. iOS and Android share the category navigation and feature catalogues. SwiftUI-compatible settings run on both platforms; iOS inspectors that still depend on UIKit stay native behind one `UIViewControllerRepresentable` per feature.
+This sample consumes the `DebugSwiftAndroid` product from the main DebugSwift package and renders its SwiftUI panel as native Android Compose UI. The category navigation, feature catalogues, and SwiftUI-compatible screens are shared. UIKit is kept around specific iOS-only inspectors and system integrations; shared settings and controls stay in SwiftUI and become Compose on Android.
 
 ## Build the sample
 
@@ -33,7 +33,7 @@ class App : Application() {
 }
 ```
 
-Add `DebugSwiftOkHttpInterceptor()` to each OkHttp client whose traffic should be captured. Wrap WebSocket listeners with `DebugSwiftWebSocketListener(url, listener)`. The delegate receives an instrumented `WebSocket`, so ordinary outgoing `send` calls are captured; the listener's `sendText` and `sendBinary` helpers are available when code still holds the raw socket. Install `DebugSwiftWebViewClient` on host WebViews. Android cannot intercept every networking stack globally, so clients using a different stack need an equivalent integration hook.
+Add `DebugSwiftOkHttpInterceptor()` to each OkHttp client whose traffic should be captured or controlled by Network Injection. Request delays, injected failures, HTTP statuses, and response modifier rules apply to requests sent through those clients. Wrap WebSocket listeners with `DebugSwiftWebSocketListener(url, listener)`. The delegate receives an instrumented `WebSocket`, so ordinary outgoing `send` calls are captured; the listener's `sendText` and `sendBinary` helpers are available when code still holds the raw socket. Install `DebugSwiftWebViewClient` on host WebViews. Android cannot intercept every networking stack globally, so clients using a different stack need an equivalent integration hook.
 
 The runtime also exposes host hooks for custom actions and diagnostic values (`registerAction`, `registerInfo`), FCM tokens (`reportPushToken`), location (`reportLocation`), Room databases, and Realm projections (`DebugSwiftRealmRegistry.register`). Configure request thresholds with `AndroidDebugTools.setRequestThreshold(limit, windowSeconds)`, `setRequestTracking(enabled)`, `setThresholdBlocking(enabled)`, and `setThresholdAlert(emoji, message)`. Register endpoint limits with `setEndpointRequestThreshold(endpoint, limit, windowSeconds)` and remove them with `removeEndpointRequestThreshold(endpoint)`; inspect counts and logs with `getCurrentRequestCount(endpoint)` and `getThresholdLogs()`. Forward Activity touch events to `AndroidDebugTools.recordTouch(event)` and wrap a Compose subtree in `DebugSwiftComposeProbe` to collect those interface diagnostics.
 
@@ -65,6 +65,6 @@ Use `DebugSwiftAndroidRuntime.log("message")` or `AndroidDebugTools.log("message
 
 ## Platform equivalents
 
-The debugger category navigation, feature catalogues, device information, push token, Console, request threshold settings, Security Audit, and host custom info/actions are shared SwiftUI on iOS and Android. Skip Lite turns those views into Compose on Android. Feature details that still need UIKit stay behind the iOS representable at that destination; the rest of the app remains shared SwiftUI. Android uses Kotlin platform implementations for lifecycle, performance, storage, notifications, and Compose diagnostics.
+The debugger category navigation, feature catalogues, device information, push token, Console, request threshold and injection settings, Security Audit, and host custom info/actions are shared SwiftUI on iOS and Android. Skip Lite turns those views into Compose on Android. UIKit representables are reserved for native iOS inspectors and system integrations that cannot share their underlying platform APIs. Android uses Kotlin platform implementations for lifecycle, performance, storage, notifications, and Compose diagnostics.
 
 Android Room/SQLite is the storage equivalent for Core Data and SwiftData. Android Keystore aliases replace Keychain inspection; secret key material remains non-exportable. Some platform data, such as a push token or a Realm schema projection, must be supplied by the host app through the hooks above. Network capture also requires the host networking integration described above.

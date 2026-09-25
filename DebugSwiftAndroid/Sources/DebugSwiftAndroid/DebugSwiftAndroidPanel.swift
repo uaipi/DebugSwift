@@ -269,11 +269,13 @@ private struct DebugSwiftFeatureDestination: View {
             DebugSwiftGridOverlaySettingsView()
         } else if feature.id == "network_thresholds" {
             DebugSwiftNetworkThresholdView()
+        } else if feature.id == "network_injection" {
+            DebugSwiftNetworkInjectionView()
         } else if feature.id == "console" {
             DebugSwiftConsoleView()
         } else if ["http", "graphql", "har_export", "webview_network"].contains(feature.id) {
             DebugSwiftNetworkInspectorView(featureID: feature.id)
-        } else if ["http", "websocket", "network_injection", "graphql", "network_encryption", "har_export", "webview_network", "network_history"].contains(feature.id) {
+        } else if ["websocket", "network_encryption", "network_history"].contains(feature.id) {
             DebugSwiftIOSNativeNetworkHost(featureID: feature.id)
                 .ignoresSafeArea(edges: .bottom)
         } else if ["performance_overview", "performance_widget", "battery", "disk", "memory_warning", "frame_drops", "hangs", "backtraces", "leaks", "thread_checker", "super_calls"].contains(feature.id) {
@@ -309,6 +311,8 @@ private struct DebugSwiftFeatureDestination: View {
             DebugSwiftGridOverlaySettingsView()
         } else if feature.id == "network_thresholds" {
             DebugSwiftNetworkThresholdView()
+        } else if feature.id == "network_injection" {
+            DebugSwiftNetworkInjectionView()
         } else if feature.id == "console" {
             DebugSwiftConsoleView()
         } else if ["http", "graphql", "har_export", "webview_network"].contains(feature.id) {
@@ -1102,6 +1106,45 @@ public enum DebugSwiftAndroidRuntime {
         DebugSwiftNativeBridge.log(message)
         #else
         NSLog("[DebugSwiftAndroid] %@", message)
+        #endif
+    }
+
+    @MainActor
+    static func networkInjectionSettingsJSON() -> String {
+        #if os(Android)
+        return DebugSwiftNativeBridge.networkInjectionSettingsJSON()
+        #else
+        return DebugSwift.Network.shared.networkInjectionSettingsJSON()
+        #endif
+    }
+
+    @MainActor
+    static func applyNetworkInjectionSettingsJSON(_ json: String) -> String {
+        #if os(Android)
+        return DebugSwiftNativeBridge.applyNetworkInjectionSettingsJSON(json)
+        #else
+        return DebugSwift.Network.shared.applyNetworkInjectionSettingsJSON(json)
+            ? "Network injection settings applied."
+            : "Could not apply network injection settings."
+        #endif
+    }
+
+    @MainActor
+    static func importNetworkInjectionRulesCSV(_ csv: String) -> String {
+        #if os(Android)
+        return DebugSwiftNativeBridge.importNetworkInjectionRulesCSV(csv)
+        #else
+        return DebugSwift.Network.shared.importResponseRewriteRulesCSV(csv)
+        #endif
+    }
+
+    @MainActor
+    static func exportNetworkInjectionRulesCSV() -> String {
+        #if os(Android)
+        return DebugSwiftNativeBridge.exportNetworkInjectionRulesCSV()
+        #else
+        DebugSwift.Network.shared.shareResponseRewriteRulesCSV()
+        return "Sharing response modifier rules."
         #endif
     }
 

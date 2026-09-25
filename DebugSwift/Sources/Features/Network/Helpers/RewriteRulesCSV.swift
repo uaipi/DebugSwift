@@ -73,7 +73,7 @@ enum RewriteRulesCSV {
             if rawStatusCode.isEmpty {
                 statusCode = nil
             } else {
-                guard let value = Int(rawStatusCode) else {
+                guard let value = Int(rawStatusCode), (100...599).contains(value) else {
                     throw RewriteRulesCSVError.invalidStatusCode(row: index + 2)
                 }
                 statusCode = value
