@@ -27,6 +27,7 @@ public final class DebugSwiftAndroidSampleAppDelegate : Sendable {
     }
 
     public func onLaunch() {
+        DebugSwiftAndroidRuntime.log("Example app launched")
     }
 
     public func onResume() {

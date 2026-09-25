@@ -65,6 +65,6 @@ Use `DebugSwiftAndroidRuntime.log("message")` or `AndroidDebugTools.log("message
 
 ## Platform equivalents
 
-The debugger category navigation, feature catalogues, device information, push token, request threshold settings, and host custom info/actions are shared SwiftUI on iOS and Android. Skip Lite turns those views into Compose on Android. Feature details that still need UIKit stay behind the iOS representable at that destination; the rest of the app remains shared SwiftUI. Android uses Kotlin platform implementations for lifecycle, performance, storage, notifications, and Compose diagnostics.
+The debugger category navigation, feature catalogues, device information, push token, Console, request threshold settings, and host custom info/actions are shared SwiftUI on iOS and Android. Skip Lite turns those views into Compose on Android. Feature details that still need UIKit stay behind the iOS representable at that destination; the rest of the app remains shared SwiftUI. Android uses Kotlin platform implementations for lifecycle, performance, storage, notifications, and Compose diagnostics.
 
 Android Room/SQLite is the storage equivalent for Core Data and SwiftData. Android Keystore aliases replace Keychain inspection; secret key material remains non-exportable. Some platform data, such as a push token or a Realm schema projection, must be supplied by the host app through the hooks above. Network capture also requires the host networking integration described above.

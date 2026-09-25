@@ -267,6 +267,8 @@ private struct DebugSwiftFeatureDestination: View {
             DebugSwiftGridOverlaySettingsView()
         } else if feature.id == "network_thresholds" {
             DebugSwiftNetworkThresholdView()
+        } else if feature.id == "console" {
+            DebugSwiftConsoleView()
         } else if ["http", "websocket", "network_injection", "graphql", "network_encryption", "har_export", "webview_network", "network_history"].contains(feature.id) {
             DebugSwiftIOSNativeNetworkHost(featureID: feature.id)
                 .ignoresSafeArea(edges: .bottom)
@@ -278,7 +280,7 @@ private struct DebugSwiftFeatureDestination: View {
         } else if ["swiftui_render", "doc_recorder", "color_palette"].contains(feature.id) {
             DebugSwiftIOSNativeInterfaceHost(featureID: feature.id)
                 .ignoresSafeArea(edges: .bottom)
-        } else if ["crashes", "console", "oslog_console", "location", "loaded_libraries", "push_simulator", "deep_links", "event_bus", "agent_debug_log"].contains(feature.id) {
+        } else if ["crashes", "oslog_console", "location", "loaded_libraries", "push_simulator", "deep_links", "event_bus", "agent_debug_log"].contains(feature.id) {
             DebugSwiftIOSNativeAppHost(featureID: feature.id)
                 .ignoresSafeArea(edges: .bottom)
         } else if ["files", "user_defaults", "keychain", "persistent_data", "core_data", "swift_data", "http_cookies", "database", "security_audit"].contains(feature.id) {
@@ -301,6 +303,8 @@ private struct DebugSwiftFeatureDestination: View {
             DebugSwiftGridOverlaySettingsView()
         } else if feature.id == "network_thresholds" {
             DebugSwiftNetworkThresholdView()
+        } else if feature.id == "console" {
+            DebugSwiftConsoleView()
         } else {
             DebugSwiftFeatureDetail(feature: feature)
         }
@@ -588,6 +592,115 @@ private struct DebugSwiftNetworkThresholdView: View {
     }
 }
 
+private struct DebugSwiftConsoleEntry: Identifiable {
+    let id: Int
+    let message: String
+}
+
+private struct DebugSwiftConsoleView: View {
+    @State private var entries: [DebugSwiftConsoleEntry] = []
+    @State private var searchText = ""
+    @State private var statusMessage = ""
+    @State private var confirmsClear = false
+
+    private var filteredEntries: [DebugSwiftConsoleEntry] {
+        guard !searchText.isEmpty else { return entries }
+        let query = searchText.lowercased()
+        return entries.filter { $0.message.lowercased().contains(query) }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                TextField("Search console", text: $searchText)
+                    .textFieldStyle(.roundedBorder)
+                Button("Refresh") { refresh() }
+            }
+            .padding()
+
+            HStack {
+                Button("Clear", role: ButtonRole.destructive) {
+                    confirmsClear = true
+                }
+                .disabled(entries.isEmpty)
+
+                Spacer()
+
+                Button("Export Logs") {
+                    perform("export")
+                }
+                .disabled(entries.isEmpty)
+            }
+            .padding(.horizontal)
+            .padding(.bottom, 8)
+
+            if filteredEntries.isEmpty {
+                Spacer()
+                Text(entries.isEmpty ? "No console messages captured." : "No messages match this search.")
+                    .foregroundColor(Color.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding()
+                Spacer()
+            } else {
+                List {
+                    ForEach(filteredEntries) { entry in
+                        HStack(alignment: VerticalAlignment.top, spacing: 12) {
+                            Text(entry.message)
+                                .font(Font.system(Font.TextStyle.footnote, design: Font.Design.monospaced))
+                                .frame(maxWidth: CGFloat.infinity, alignment: Alignment.leading)
+
+                            Button(role: ButtonRole.destructive) {
+                                perform("delete_console_entry", value: "\(entry.id)")
+                            } label: {
+                                Image(systemName: "trash")
+                            }
+                            .accessibilityLabel("Delete console entry")
+                        }
+                        .padding(.vertical, 4)
+                    }
+                }
+            }
+
+            if !statusMessage.isEmpty {
+                Text(statusMessage)
+                    .font(Font.caption)
+                    .foregroundColor(Color.secondary)
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+            }
+        }
+        .navigationTitle("Console")
+        .onAppear { refresh() }
+        .alert("Clear all console messages?", isPresented: $confirmsClear) {
+            Button("Cancel", role: ButtonRole.cancel) {}
+            Button("Clear", role: ButtonRole.destructive) { perform("clear") }
+        } message: {
+            Text("This removes every captured print and NSLog entry.")
+        }
+    }
+
+    private func refresh() {
+        let snapshot = DebugSwiftAndroidRuntime.snapshot(featureID: "console")
+        guard let data = snapshot.data(using: .utf8),
+              let messages = try? JSONDecoder().decode([String].self, from: data) else {
+            entries = []
+            statusMessage = "Console data could not be loaded."
+            return
+        }
+        entries = messages.indices.map { index in DebugSwiftConsoleEntry(id: index, message: messages[index]) }
+        statusMessage = entries.count == 1 ? "1 message" : "\(entries.count) messages"
+    }
+
+    private func perform(_ actionID: String, value: String = "") {
+        statusMessage = DebugSwiftAndroidRuntime.perform(
+            featureID: "console",
+            actionID: actionID,
+            value: value
+        )
+        refresh()
+    }
+}
+
 #if os(iOS)
 private struct DebugSwiftIOSNativeInterfaceHost: UIViewControllerRepresentable {
     let featureID: String
@@ -860,6 +973,12 @@ public enum DebugSwiftAndroidRuntime {
         return DebugSwiftNativeBridge.snapshot(featureID)
         #else
         switch featureID {
+        case "console":
+            guard let data = try? JSONEncoder().encode(DebugSwift.Console.shared.messages()),
+                  let json = String(data: data, encoding: String.Encoding.utf8) else {
+                return "[]"
+            }
+            return json
         case "network_thresholds":
             let snapshot = DebugSwift.Network.shared.getThresholdSnapshot()
             let endpointRows = snapshot.endpointLimits.map { "\($0.endpoint) — \($0.limit) per \(Int($0.timeWindow))s" }
@@ -899,6 +1018,26 @@ public enum DebugSwiftAndroidRuntime {
         #if os(Android)
         return DebugSwiftNativeBridge.perform(featureID, actionID, value)
         #else
+        if featureID == "console" {
+            switch actionID {
+            case "clear":
+                DebugSwift.Console.shared.clear()
+                return "Console cleared."
+            case "delete_console_entry":
+                guard let index = Int(value), DebugSwift.Console.shared.messages().indices.contains(index) else {
+                    return "Console entry no longer exists."
+                }
+                DebugSwift.Console.shared.removeMessage(at: index)
+                return "Console entry removed."
+            case "export":
+                DebugSwift.Console.shared.shareMessages()
+                return "Sharing console log."
+            case "refresh":
+                return snapshot(featureID: featureID)
+            default:
+                return "Unknown Console action: \(actionID)."
+            }
+        }
         if featureID == "network_thresholds" {
             let network = DebugSwift.Network.shared
             switch actionID {

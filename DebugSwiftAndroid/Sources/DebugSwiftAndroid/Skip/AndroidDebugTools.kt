@@ -457,6 +457,15 @@ object AndroidDebugTools {
             "remove_notification" -> removePushNotification(context, value)
             "interact_notification" -> interactWithPushNotification(context, value)
             "resend_notification" -> resendPushNotification(context, value)
+            "delete_console_entry" -> {
+                val index = value.toIntOrNull()
+                if (featureID != "console" || index == null || index !in consoleRecords.indices) {
+                    "Console entry no longer exists."
+                } else {
+                    consoleRecords.removeAt(index)
+                    "Console entry removed."
+                }
+            }
             "history_page" -> showPushHistoryPage(context, value)
             "open_notification_settings" -> openNotificationSettings(context)
             "refresh" -> snapshot(featureID)
@@ -1856,7 +1865,7 @@ object AndroidDebugTools {
     private fun appSnapshot(context: Context, featureID: String): String {
         return when (featureID) {
             "crashes" -> "Saved crash reports:\n" + crashRecords.takeLast(20).asReversed().joinToString("\n\n") { it }.ifEmpty { "No uncaught crash reports saved by DebugSwift." } + "\n\nRecent Android process exits:\n${platformExitHistory(context)}"
-            "console" -> consoleRecords.takeLast(100).asReversed().joinToString("\n").ifEmpty { "No messages captured. Use DebugSwiftAndroidRuntime.log() from the host app." }
+            "console" -> JSONArray().also { entries -> consoleRecords.forEach { entries.put(it) } }.toString()
             "oslog_console" -> logcatSnapshot()
             "push_token" -> pushToken
             "push_simulator" -> pushNotificationSnapshot(context)
