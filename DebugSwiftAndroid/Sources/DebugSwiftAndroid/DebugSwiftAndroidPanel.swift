@@ -190,7 +190,7 @@ enum DebugSwiftArea: String, CaseIterable, Identifiable, Hashable {
                 .init("core_data", "Room Database", "Browse the Android database layer, including registered Room databases."),
                 .init("swift_data", "Object Store", "Inspect SQLite or Room storage used in place of SwiftData on Android."),
                 .init("cookies", "HTTP Cookies", "Inspect WebView cookies for app-owned domains."),
-                .init("security_audit", "Security Audit", "Find sensitive-looking keys in registered preferences and app-private text files.")
+                .init("security_audit", "Security Audit", "Check app preferences, manifest metadata, bundled credentials, and private text files for sensitive data.")
             ]
             #endif
         case .app:
@@ -500,6 +500,8 @@ struct DebugSwiftFeatureDetail: View {
             ["refresh", "capture", "clear", "export"]
         case "animation_control":
             ["refresh", "open_animation_settings"]
+        case "security_audit":
+            ["refresh"]
         case "touches", "view_borders", "thread_checker", "performance_widget":
             ["refresh", "toggle", "capture"]
         case "push_simulator":

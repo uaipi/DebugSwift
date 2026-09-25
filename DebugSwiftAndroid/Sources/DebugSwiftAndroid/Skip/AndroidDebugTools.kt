@@ -26,6 +26,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.security.keystore.KeyInfo
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import java.io.File
@@ -33,15 +34,19 @@ import java.io.PrintWriter
 import java.io.StringWriter
 import java.lang.ref.WeakReference
 import java.security.KeyStore
+import java.security.KeyFactory
+import java.security.PrivateKey
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
 import java.util.UUID
+import java.util.zip.ZipFile
 import java.util.concurrent.CopyOnWriteArrayList
 import java.util.concurrent.Executors
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.crypto.SecretKey
+import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import kotlin.math.PI
@@ -1382,32 +1387,104 @@ object AndroidDebugTools {
     }
 
     private fun securityAudit(context: Context): String {
-        val sensitiveName = Regex("password|secret|token|credential|private.?key", RegexOption.IGNORE_CASE)
-        val matches = linkedSetOf<String>()
-        registeredPreferences.forEach { name ->
+        val sensitiveName = Regex("password|secret|token|credential|api.?key|key", RegexOption.IGNORE_CASE)
+        val criticalFindings = linkedSetOf<String>()
+        val warningFindings = linkedSetOf<String>()
+
+        val preferenceDirectory = File(context.applicationInfo.dataDir, "shared_prefs")
+        val preferenceNames = (registeredPreferences + preferenceDirectory.listFiles()
+            .orEmpty()
+            .filter { it.isFile && it.extension.equals("xml", ignoreCase = true) }
+            .map { it.nameWithoutExtension }).toSet()
+        preferenceNames.forEach { name ->
             context.getSharedPreferences(name, Context.MODE_PRIVATE).all.forEach { (key, value) ->
-                if (sensitiveName.containsMatchIn(key)) {
-                    matches.add("$name: $key (${value?.javaClass?.simpleName ?: "null"})")
+                if (sensitiveName.containsMatchIn(key) && value is String && value.isNotEmpty()) {
+                    warningFindings.add("User preferences · $name: $key — sensitive key has a non-empty string value")
                 }
             }
         }
+
+        val manifestMetadata = runCatching {
+            context.packageManager.getApplicationInfo(
+                context.packageName,
+                android.content.pm.PackageManager.GET_META_DATA
+            ).metaData
+        }.getOrNull()
+        manifestMetadata?.keySet()?.forEach { key ->
+            val value = manifestMetadata.get(key)
+            if (sensitiveName.containsMatchIn(key) && value is String && value.isNotEmpty()) {
+                warningFindings.add("Manifest metadata · $key — sensitive key has a non-empty string value")
+            }
+        }
+
+        val bundleFiles = linkedSetOf<String>()
+        val apkPaths = mutableListOf(context.applicationInfo.sourceDir)
+        context.applicationInfo.splitSourceDirs?.forEach(apkPaths::add)
+        apkPaths.forEach { apkPath ->
+            runCatching {
+                ZipFile(apkPath).use { apk ->
+                    apk.entries().asSequence()
+                        .filter { entry ->
+                            !entry.isDirectory && (entry.name.startsWith("assets/") || entry.name.startsWith("res/raw/"))
+                        }
+                        .forEach { bundleFiles.add(it.name) }
+                }
+            }
+        }
+        val credentialExtensions = setOf("cer", "p12", "mobileconfig", "pem", "key")
+        bundleFiles.forEach { path ->
+            if (credentialExtensions.contains(path.substringAfterLast('.', "").lowercase())) {
+                criticalFindings.add("App bundle · $path — credential file is packaged with the app")
+            }
+        }
+
         var filesScanned = 0
         context.filesDir.walkTopDown().filter { it.isFile }.take(200).forEach { file ->
             if (file.length() > 256_000 || file.extension.lowercase() in setOf("db", "sqlite", "png", "jpg", "jpeg", "webp", "zip", "so")) return@forEach
             filesScanned++
             if (sensitiveName.containsMatchIn(file.name)) {
-                matches.add("${file.relativeTo(context.filesDir).path}: sensitive-looking filename")
+                warningFindings.add("Private file · ${file.relativeTo(context.filesDir).path} — sensitive-looking filename")
             }
             val content = runCatching { file.readText() }.getOrNull() ?: return@forEach
             if ('\u0000' in content) return@forEach
             Regex("(password|secret|token|credential|private.?key)[\\\"']?\\s*[:=]", RegexOption.IGNORE_CASE)
                 .findAll(content).take(20).forEach { match ->
-                    matches.add("${file.relativeTo(context.filesDir).path}: ${match.groupValues[1]} assignment")
+                    warningFindings.add("Private file · ${file.relativeTo(context.filesDir).path} — ${match.groupValues[1]} assignment")
                 }
         }
-        return "Potentially sensitive references: ${matches.size}\nPreference stores: ${registeredPreferences.size}\nPrivate text files scanned: $filesScanned\n" +
-            matches.take(100).joinToString("\n").ifEmpty { "No matches found in registered preferences or scanned private text files." } +
-            "\n\nThe audit reports key names only and never displays matched values. It does not prove whether a custom store encrypts its contents."
+
+        val keyStorePolicies = runCatching {
+            val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
+            store.aliases().toList().mapNotNull { alias ->
+                val key = runCatching { store.getKey(alias, null) }.getOrNull() ?: return@mapNotNull null
+                val keySpec = when (key) {
+                    is SecretKey -> runCatching {
+                        SecretKeyFactory.getInstance(key.algorithm, "AndroidKeyStore")
+                            .getKeySpec(key, KeyInfo::class.java)
+                    }.getOrNull()
+                    is PrivateKey -> runCatching {
+                        KeyFactory.getInstance(key.algorithm, "AndroidKeyStore")
+                            .getKeySpec(key, KeyInfo::class.java)
+                    }.getOrNull()
+                    else -> null
+                }
+                alias to (keySpec as? KeyInfo)
+            }
+        }.getOrDefault(emptyList())
+        val keyStoreFindings = keyStorePolicies.mapNotNull { (alias, info) ->
+            if (info != null && !info.isUserAuthenticationRequired()) {
+                "Android Keystore · $alias — key use does not require user authentication"
+            } else {
+                null
+            }
+        }
+        val count = criticalFindings.size + warningFindings.size + keyStoreFindings.size
+        return "Potentially sensitive references: $count\n\n" +
+            "Critical (${criticalFindings.size})\n" + criticalFindings.take(100).joinToString("\n").ifEmpty { "No credential files found in the app bundle." } +
+            "\n\nWarning (${warningFindings.size})\n" + warningFindings.take(100).joinToString("\n").ifEmpty { "No sensitive keys or assignments found in scanned preferences, manifest metadata, or private text files." } +
+            "\n\nInfo (${keyStoreFindings.size})\n" + keyStoreFindings.take(100).joinToString("\n").ifEmpty { "No Android Keystore keys without user-authentication requirements were reported." } +
+            "\n\nScanned: ${preferenceNames.size} preference stores, ${manifestMetadata?.size() ?: 0} manifest metadata entries, ${bundleFiles.size} bundled files, $filesScanned private text files, and ${keyStorePolicies.size} Android Keystore key policies.\n" +
+            "The audit reports key names and file paths only; it never displays matched values."
     }
 
     private fun writePreference(context: Context, value: String): String {

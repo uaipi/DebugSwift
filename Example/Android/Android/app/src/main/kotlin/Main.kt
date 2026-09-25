@@ -45,6 +45,7 @@ open class AndroidAppMain: Application {
         super.onCreate()
         logger.info("starting app")
         AndroidDebugTools.install(applicationContext)
+        AndroidDebugTools.registerPreferences("user_preferences")
         ProcessInfo.launch(applicationContext)
         AppDelegate.shared.onInit()
     }
