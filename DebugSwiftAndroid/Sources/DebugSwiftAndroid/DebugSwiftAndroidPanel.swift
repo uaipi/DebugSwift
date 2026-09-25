@@ -47,7 +47,7 @@ private struct DebugSwiftAndroidPanelContent: View {
             }
 
             #if os(iOS)
-            if selectedArea == .interface || selectedArea == .resources {
+            if selectedArea == .interface || selectedArea == .resources || selectedArea == .app {
                 NavigationStack {
                     DebugSwiftFeatureList(area: selectedArea)
                         .navigationTitle(selectedArea.title)
@@ -196,7 +196,7 @@ enum DebugSwiftArea: String, CaseIterable, Identifiable, Hashable {
             ]
             #endif
         case .app:
-            return [
+            let features: [DebugSwiftTool] = [
                 .init("crashes", "Crash Reports", "Save uncaught application crashes with stack traces and timestamps."),
                 .init("console", "Console", "View, clear, and export messages written through the DebugSwift logger."),
                 .init("oslog_console", "System Log", "Browse this app's Android Logcat records, filter messages, and export the results."),
@@ -211,6 +211,12 @@ enum DebugSwiftArea: String, CaseIterable, Identifiable, Hashable {
                 .init("event_bus", "Event Timeline", "Browse network, performance, interface, app, and resource events."),
                 .init("agent_debug_log", "Agent Debug Log", "Stream app events, network activity, console messages, and crashes to an NDJSON file.")
             ]
+            #if os(iOS)
+            let availableIDs = Set(DebugSwift.availableAppFeatureIDs())
+            return features.filter { availableIDs.contains($0.id) }
+            #else
+            return features
+            #endif
         }
     }
 }
@@ -261,6 +267,9 @@ private struct DebugSwiftFeatureDestination: View {
             DebugSwiftInterfaceSettingView(featureID: feature.id)
         } else if ["swiftui_render", "doc_recorder", "color_palette"].contains(feature.id) {
             DebugSwiftIOSNativeInterfaceHost(featureID: feature.id)
+                .ignoresSafeArea(edges: .bottom)
+        } else if ["crashes", "console", "oslog_console", "location", "loaded_libraries", "push_simulator", "deep_links", "event_bus", "agent_debug_log", "device_info", "push_token", "custom_actions", "custom_info"].contains(feature.id) {
+            DebugSwiftIOSNativeAppHost(featureID: feature.id)
                 .ignoresSafeArea(edges: .bottom)
         } else if ["files", "user_defaults", "keychain", "persistent_data", "core_data", "swift_data", "http_cookies", "database", "security_audit"].contains(feature.id) {
             if feature.id == "swift_data" {
@@ -419,6 +428,17 @@ private struct DebugSwiftIOSNativeResourceHost: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> UIViewController {
         DebugSwiftAndroidRuntime.prepareIOSDebugger()
         return DebugSwift.debugResourceViewController(for: featureID) ?? UIViewController()
+    }
+
+    func updateUIViewController(_ viewController: UIViewController, context: Context) {}
+}
+
+private struct DebugSwiftIOSNativeAppHost: UIViewControllerRepresentable {
+    let featureID: String
+
+    func makeUIViewController(context: Context) -> UIViewController {
+        DebugSwiftAndroidRuntime.prepareIOSDebugger()
+        return DebugSwift.debugAppViewController(for: featureID) ?? UIViewController()
     }
 
     func updateUIViewController(_ viewController: UIViewController, context: Context) {}

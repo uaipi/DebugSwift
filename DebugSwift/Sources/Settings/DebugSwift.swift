@@ -171,3 +171,65 @@ public class DebugSwift {
         DebugSwiftFeature.allCases.filter { !FeatureHandling.hiddenFeatures.contains($0) }
     }
 }
+
+public extension DebugSwift {
+    /// The app tools exposed in the shared SwiftUI feature list.
+    @MainActor
+    static func availableAppFeatureIDs() -> [String] {
+        var featureIDs = ["device_info", "push_token", "custom_actions", "custom_info"]
+        for action in AppViewController.ActionInfo.allCasesWithPermission {
+            switch action {
+            case .crash: featureIDs.append("crashes")
+            case .console: featureIDs.append("console")
+            case .oslogConsole: featureIDs.append("oslog_console")
+            case .location: featureIDs.append("location")
+            case .loadedLibraries: featureIDs.append("loaded_libraries")
+            case .pushNotifications: featureIDs.append("push_simulator")
+            case .deepLink: featureIDs.append("deep_links")
+            case .eventTimeline: featureIDs.append("event_bus")
+            case .agentDebugLog: featureIDs.append("agent_debug_log")
+            }
+        }
+        return featureIDs
+    }
+
+    /// Builds the existing UIKit detail screen for an app tool that has not yet
+    /// been migrated to shared SwiftUI.
+    @MainActor
+    static func debugAppViewController(for featureID: String) -> UIViewController? {
+        let rootController: UIViewController
+        switch featureID {
+        case "crashes":
+            rootController = CrashViewController()
+        case "console":
+            rootController = ResourcesGenericController(viewModel: AppConsoleViewModel())
+        case "oslog_console":
+            guard #available(iOS 15.0, *) else { return nil }
+            rootController = OSLogConsoleViewController()
+        case "location":
+            rootController = LocationViewController()
+        case "loaded_libraries":
+            rootController = LoadedLibrariesViewController()
+        case "push_simulator":
+            rootController = PushNotificationController()
+        case "deep_links":
+            rootController = DeepLinkViewController()
+        case "event_bus":
+            rootController = EventTimelineViewController()
+        case "agent_debug_log":
+            rootController = AgentDebugLogViewController()
+        case "device_info", "push_token", "custom_actions", "custom_info":
+            rootController = AppViewController()
+        default:
+            return nil
+        }
+
+        rootController.navigationItem.largeTitleDisplayMode = .never
+        let navigationController = UINavigationController(rootViewController: rootController)
+        navigationController.navigationBar.prefersLargeTitles = false
+        navigationController.navigationBar.tintColor = .white
+        navigationController.view.backgroundColor = .black
+        navigationController.overrideUserInterfaceStyle = .dark
+        return navigationController
+    }
+}
