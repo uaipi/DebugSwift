@@ -440,6 +440,15 @@ object AndroidDebugTools {
         }
     }
 
+    @JvmStatic
+    fun securityAuditSnapshot(): String {
+        val context = appContext ?: return JSONObject()
+            .put("findings", JSONArray())
+            .put("summary", "Android runtime has not been installed.")
+            .toString()
+        return securityAuditSnapshotJSON(context)
+    }
+
     fun perform(featureID: String, actionID: String, value: String = ""): String {
         val context = appContext ?: return "Android runtime has not been installed."
         return when (actionID) {
@@ -3016,10 +3025,26 @@ object AndroidDebugTools {
         }.ifEmpty { "No matching process exit records reported by Android." }
     }
 
-    private fun securityAudit(context: Context): String {
+    private data class SecurityAuditFinding(
+        val severity: String,
+        val source: String,
+        val key: String,
+        val message: String
+    )
+
+    private data class SecurityAuditReport(
+        val findings: List<SecurityAuditFinding>,
+        val summary: String,
+        val scannedDetails: String
+    ) {
+        fun findings(forSeverity: String): List<SecurityAuditFinding> =
+            findings.filter { it.severity == forSeverity }
+    }
+
+    private fun securityAuditReport(context: Context): SecurityAuditReport {
         val sensitiveName = Regex("password|secret|token|credential|api.?key|key", RegexOption.IGNORE_CASE)
-        val criticalFindings = linkedSetOf<String>()
-        val warningFindings = linkedSetOf<String>()
+        val criticalFindings = linkedSetOf<SecurityAuditFinding>()
+        val warningFindings = linkedSetOf<SecurityAuditFinding>()
 
         val preferenceDirectory = File(context.applicationInfo.dataDir, "shared_prefs")
         val preferenceNames = (registeredPreferences + preferenceDirectory.listFiles()
@@ -3029,7 +3054,12 @@ object AndroidDebugTools {
         preferenceNames.forEach { name ->
             context.getSharedPreferences(name, Context.MODE_PRIVATE).all.forEach { (key, value) ->
                 if (sensitiveName.containsMatchIn(key) && value is String && value.isNotEmpty()) {
-                    warningFindings.add("User preferences · $name: $key — sensitive key has a non-empty string value")
+                    warningFindings.add(SecurityAuditFinding(
+                        severity = "warning",
+                        source = "preferences",
+                        key = "$name:$key",
+                        message = "Sensitive key has a non-empty string value in app preferences."
+                    ))
                 }
             }
         }
@@ -3043,7 +3073,12 @@ object AndroidDebugTools {
         manifestMetadata?.keySet()?.forEach { key ->
             val value = manifestMetadata.get(key)
             if (sensitiveName.containsMatchIn(key) && value is String && value.isNotEmpty()) {
-                warningFindings.add("Manifest metadata · $key — sensitive key has a non-empty string value")
+                warningFindings.add(SecurityAuditFinding(
+                    severity = "warning",
+                    source = "manifest",
+                    key = key,
+                    message = "Sensitive key has a non-empty string value in manifest metadata."
+                ))
             }
         }
 
@@ -3064,7 +3099,12 @@ object AndroidDebugTools {
         val credentialExtensions = setOf("cer", "p12", "mobileconfig", "pem", "key")
         bundleFiles.forEach { path ->
             if (credentialExtensions.contains(path.substringAfterLast('.', "").lowercase())) {
-                criticalFindings.add("App bundle · $path — credential file is packaged with the app")
+                criticalFindings.add(SecurityAuditFinding(
+                    severity = "critical",
+                    source = "bundle",
+                    key = path,
+                    message = "Credential file is packaged with the app."
+                ))
             }
         }
 
@@ -3073,13 +3113,23 @@ object AndroidDebugTools {
             if (file.length() > 256_000 || file.extension.lowercase() in setOf("db", "sqlite", "png", "jpg", "jpeg", "webp", "zip", "so")) return@forEach
             filesScanned++
             if (sensitiveName.containsMatchIn(file.name)) {
-                warningFindings.add("Private file · ${file.relativeTo(context.filesDir).path} — sensitive-looking filename")
+                warningFindings.add(SecurityAuditFinding(
+                    severity = "warning",
+                    source = "privateFile",
+                    key = file.relativeTo(context.filesDir).path,
+                    message = "Private file has a sensitive-looking filename."
+                ))
             }
             val content = runCatching { file.readText() }.getOrNull() ?: return@forEach
             if ('\u0000' in content) return@forEach
-            Regex("(password|secret|token|credential|private.?key)[\\\"']?\\s*[:=]", RegexOption.IGNORE_CASE)
-                .findAll(content).take(20).forEach { match ->
-                    warningFindings.add("Private file · ${file.relativeTo(context.filesDir).path} — ${match.groupValues[1]} assignment")
+                Regex("(password|secret|token|credential|private.?key)[\\\"']?\\s*[:=]", RegexOption.IGNORE_CASE)
+                    .findAll(content).take(20).forEach { match ->
+                    warningFindings.add(SecurityAuditFinding(
+                        severity = "warning",
+                        source = "privateFile",
+                        key = file.relativeTo(context.filesDir).path,
+                        message = "Contains a ${match.groupValues[1]} assignment."
+                    ))
                 }
         }
 
@@ -3103,17 +3153,51 @@ object AndroidDebugTools {
         }.getOrDefault(emptyList())
         val keyStoreFindings = keyStorePolicies.mapNotNull { (alias, info) ->
             if (info != null && !info.isUserAuthenticationRequired()) {
-                "Android Keystore · $alias — key use does not require user authentication"
+                SecurityAuditFinding(
+                    severity = "info",
+                    source = "keyStore",
+                    key = alias,
+                    message = "Key use does not require user authentication."
+                )
             } else {
                 null
             }
         }
-        val count = criticalFindings.size + warningFindings.size + keyStoreFindings.size
-        return "Potentially sensitive references: $count\n\n" +
-            "Critical (${criticalFindings.size})\n" + criticalFindings.take(100).joinToString("\n").ifEmpty { "No credential files found in the app bundle." } +
-            "\n\nWarning (${warningFindings.size})\n" + warningFindings.take(100).joinToString("\n").ifEmpty { "No sensitive keys or assignments found in scanned preferences, manifest metadata, or private text files." } +
-            "\n\nInfo (${keyStoreFindings.size})\n" + keyStoreFindings.take(100).joinToString("\n").ifEmpty { "No Android Keystore keys without user-authentication requirements were reported." } +
-            "\n\nScanned: ${preferenceNames.size} preference stores, ${manifestMetadata?.size() ?: 0} manifest metadata entries, ${bundleFiles.size} bundled files, $filesScanned private text files, and ${keyStorePolicies.size} Android Keystore key policies.\n" +
+        val findings = (criticalFindings + warningFindings + keyStoreFindings).take(300)
+        val scannedDetails = "Scanned ${preferenceNames.size} preference stores, ${manifestMetadata?.size() ?: 0} manifest metadata entries, ${bundleFiles.size} bundled files, $filesScanned private text files, and ${keyStorePolicies.size} Android Keystore key policies."
+        val summary = "Potentially sensitive references: ${findings.size} · ${criticalFindings.size} critical · ${warningFindings.size} warnings · ${keyStoreFindings.size} info.\n$scannedDetails Matched values are never displayed."
+        return SecurityAuditReport(findings, summary, scannedDetails)
+    }
+
+    private fun securityAuditSnapshotJSON(context: Context): String {
+        val report = securityAuditReport(context)
+        val findings = JSONArray()
+        report.findings.forEach { finding ->
+            findings.put(JSONObject()
+                .put("severity", finding.severity)
+                .put("source", finding.source)
+                .put("key", finding.key)
+                .put("message", finding.message))
+        }
+        return JSONObject()
+            .put("findings", findings)
+            .put("summary", report.summary)
+            .toString()
+    }
+
+    private fun securityAudit(context: Context): String {
+        val report = securityAuditReport(context)
+        val critical = report.findings("critical")
+        val warnings = report.findings("warning")
+        val info = report.findings("info")
+        fun format(findings: List<SecurityAuditFinding>): String = findings.joinToString("\n") {
+            "${it.source} · ${it.key} — ${it.message}"
+        }
+        return "Potentially sensitive references: ${report.findings.size}\n\n" +
+            "Critical (${critical.size})\n" + format(critical).ifEmpty { "No credential files found in the app bundle." } +
+            "\n\nWarning (${warnings.size})\n" + format(warnings).ifEmpty { "No sensitive keys or assignments found in scanned preferences, manifest metadata, or private text files." } +
+            "\n\nInfo (${info.size})\n" + format(info).ifEmpty { "No Android Keystore keys without user-authentication requirements were reported." } +
+            "\n\n${report.scannedDetails}\n" +
             "The audit reports key names and file paths only; it never displays matched values."
     }
 

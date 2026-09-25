@@ -6,6 +6,9 @@ object DebugSwiftNativeBridge {
     fun snapshot(featureID: String): String = AndroidDebugTools.snapshot(featureID)
 
     @JvmStatic
+    fun securityAuditSnapshot(): String = AndroidDebugTools.securityAuditSnapshot()
+
+    @JvmStatic
     fun perform(featureID: String, actionID: String, value: String): String =
         AndroidDebugTools.perform(featureID, actionID, value)
 

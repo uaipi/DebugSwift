@@ -50,3 +50,11 @@ enum SecurityAuditorAdapter {
         [:]
     }
 }
+
+public extension DebugSwift.Resources {
+    /// Runs the platform's secure-storage and bundled-resource audit.
+    @MainActor
+    func securityAuditFindings() -> [SecurityFinding] {
+        SecurityAuditorAdapter.audit()
+    }
+}

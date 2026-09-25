@@ -263,7 +263,9 @@ private struct DebugSwiftFeatureDestination: View {
     @ViewBuilder
     var body: some View {
         #if os(iOS)
-        if feature.id == "grid" {
+        if feature.id == "security_audit" {
+            DebugSwiftSecurityAuditView()
+        } else if feature.id == "grid" {
             DebugSwiftGridOverlaySettingsView()
         } else if feature.id == "network_thresholds" {
             DebugSwiftNetworkThresholdView()
@@ -299,7 +301,9 @@ private struct DebugSwiftFeatureDestination: View {
             DebugSwiftFeatureDetail(feature: feature)
         }
         #else
-        if feature.id == "grid" {
+        if feature.id == "security_audit" {
+            DebugSwiftSecurityAuditView()
+        } else if feature.id == "grid" {
             DebugSwiftGridOverlaySettingsView()
         } else if feature.id == "network_thresholds" {
             DebugSwiftNetworkThresholdView()
@@ -595,6 +599,136 @@ private struct DebugSwiftNetworkThresholdView: View {
 private struct DebugSwiftConsoleEntry: Identifiable {
     let id: Int
     let message: String
+}
+
+struct DebugSwiftSecurityAuditFinding: Codable, Identifiable {
+    let severity: String
+    let source: String
+    let key: String
+    let message: String
+
+    var id: String { "\(severity)|\(source)|\(key)|\(message)" }
+
+    var sourceTitle: String {
+        switch source {
+        case "userDefaults": "User Defaults"
+        case "infoPlist": "Info.plist"
+        case "bundle": "App Bundle"
+        case "keychain": "Keychain"
+        case "preferences": "Preferences"
+        case "manifest": "Manifest"
+        case "privateFile": "Private File"
+        case "keyStore": "Android Keystore"
+        default: source
+        }
+    }
+}
+
+struct DebugSwiftSecurityAuditSnapshot: Codable {
+    let findings: [DebugSwiftSecurityAuditFinding]
+    let summary: String
+}
+
+private struct DebugSwiftSecurityAuditView: View {
+    @State private var audit = DebugSwiftSecurityAuditSnapshot(
+        findings: [],
+        summary: "Run the audit to scan this app's settings and bundled resources."
+    )
+    @State private var hasRun = false
+
+    private var criticalFindings: [DebugSwiftSecurityAuditFinding] {
+        audit.findings.filter { $0.severity == "critical" }
+    }
+
+    private var warningFindings: [DebugSwiftSecurityAuditFinding] {
+        audit.findings.filter { $0.severity == "warning" }
+    }
+
+    private var infoFindings: [DebugSwiftSecurityAuditFinding] {
+        audit.findings.filter { $0.severity == "info" }
+    }
+
+    var body: some View {
+        List {
+            Section("Audit") {
+                Text(audit.summary)
+                    .font(Font.subheadline)
+                    .foregroundColor(Color.secondary)
+
+                Button {
+                    refresh()
+                } label: {
+                    HStack {
+                        Image(systemName: "arrow.clockwise")
+                        Text("Run Security Audit")
+                    }
+                }
+            }
+
+            if hasRun, audit.findings.isEmpty {
+                Section("Results") {
+                    Text("No security findings were reported.")
+                        .foregroundColor(Color.secondary)
+                }
+            }
+
+            if !criticalFindings.isEmpty {
+                Section("Critical (\(criticalFindings.count))") {
+                    ForEach(criticalFindings) { finding in
+                        findingRow(finding, color: Color.red)
+                    }
+                }
+            }
+
+            if !warningFindings.isEmpty {
+                Section("Warning (\(warningFindings.count))") {
+                    ForEach(warningFindings) { finding in
+                        findingRow(finding, color: Color.orange)
+                    }
+                }
+            }
+
+            if !infoFindings.isEmpty {
+                Section("Info (\(infoFindings.count))") {
+                    ForEach(infoFindings) { finding in
+                        findingRow(finding, color: Color.blue)
+                    }
+                }
+            }
+        }
+        .navigationTitle("Security Audit")
+        .onAppear { refresh() }
+    }
+
+    private func findingRow(_ finding: DebugSwiftSecurityAuditFinding, color: Color) -> some View {
+        HStack(alignment: VerticalAlignment.top, spacing: 12) {
+            RoundedRectangle(cornerRadius: 3)
+                .fill(color)
+                .frame(width: 6, height: 38)
+
+            VStack(alignment: HorizontalAlignment.leading, spacing: 4) {
+                HStack(alignment: VerticalAlignment.firstTextBaseline) {
+                    Text(finding.sourceTitle)
+                        .font(Font.caption)
+                        .foregroundColor(Color.secondary)
+                    Spacer()
+                }
+                Text(finding.key)
+                    .font(Font.headline)
+                    .lineLimit(2)
+                Text(finding.message)
+                    .font(Font.subheadline)
+                    .foregroundColor(Color.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+        .padding(.vertical, 4)
+    }
+
+    private func refresh() {
+        audit = DebugSwiftAndroidRuntime.securityAuditSnapshot()
+        hasRun = true
+    }
 }
 
 private struct DebugSwiftConsoleView: View {
@@ -1011,6 +1145,39 @@ public enum DebugSwiftAndroidRuntime {
             return "Open the UIKit debugger on iOS to inspect live app data."
         }
         #endif
+    }
+
+    @MainActor
+    fileprivate static func securityAuditSnapshot() -> DebugSwiftSecurityAuditSnapshot {
+        let json: String
+        #if os(Android)
+        json = DebugSwiftNativeBridge.securityAuditSnapshot()
+        #else
+        let findings = DebugSwift.Resources.shared.securityAuditFindings().map { finding in
+            DebugSwiftSecurityAuditFinding(
+                severity: finding.severity.rawValue,
+                source: finding.source.rawValue,
+                key: finding.key,
+                message: finding.message
+            )
+        }
+        let criticalCount = findings.filter { $0.severity == "critical" }.count
+        let warningCount = findings.filter { $0.severity == "warning" }.count
+        let infoCount = findings.filter { $0.severity == "info" }.count
+        let summary = "Potentially sensitive references: \(findings.count) · \(criticalCount) critical · \(warningCount) warnings · \(infoCount) info. Matched values are never displayed."
+        let snapshot = DebugSwiftSecurityAuditSnapshot(findings: findings, summary: summary)
+        guard let data = try? JSONEncoder().encode(snapshot),
+              let encoded = String(data: data, encoding: String.Encoding.utf8) else {
+            return DebugSwiftSecurityAuditSnapshot(findings: [], summary: "Security audit data could not be encoded.")
+        }
+        json = encoded
+        #endif
+
+        guard let data = json.data(using: String.Encoding.utf8),
+              let snapshot = try? JSONDecoder().decode(DebugSwiftSecurityAuditSnapshot.self, from: data) else {
+            return DebugSwiftSecurityAuditSnapshot(findings: [], summary: "Security audit data could not be loaded.")
+        }
+        return snapshot
     }
 
     @MainActor
