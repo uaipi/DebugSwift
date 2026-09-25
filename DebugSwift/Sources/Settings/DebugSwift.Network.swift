@@ -508,6 +508,16 @@ extension DebugSwift {
             }
         }
 
+        /// The URL expressions currently associated with registered AES keys.
+        public var registeredDecryptionKeyPatterns: [String] {
+            (encryptionService as? EncryptionService)?.registeredDecryptionKeyPatterns() ?? []
+        }
+
+        /// Remove all registered AES keys from this process.
+        public func clearDecryptionKeys() {
+            (encryptionService as? EncryptionService)?.clearDecryptionKeys()
+        }
+
         /// Register a custom decryptor for specific URL patterns
         public func registerCustomDecryptor(for urlPattern: String, decryptor: @escaping (Data) -> Data?) {
             encryptionService.registerCustomDecryptor(for: urlPattern, decryptor: decryptor)

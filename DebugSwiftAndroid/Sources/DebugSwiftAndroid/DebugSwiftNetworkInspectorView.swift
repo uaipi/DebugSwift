@@ -98,6 +98,11 @@ private struct DebugSwiftNetworkInspectorSnapshot: Codable {
     let requests: [DebugSwiftNetworkRequestSnapshot]
 }
 
+private struct DebugSwiftNetworkDecryptionSettings: Codable {
+    var isEnabled = false
+    var patterns: [String] = []
+}
+
 struct DebugSwiftNetworkInspectorView: View {
     let featureID: String
 
@@ -109,6 +114,9 @@ struct DebugSwiftNetworkInspectorView: View {
     @State private var showingFilters = false
     @State private var filterSettings = DebugSwiftNetworkFilterSettings()
     @State private var filterDraft = DebugSwiftNetworkFilterSettings()
+    @State private var decryptionSettings = DebugSwiftNetworkDecryptionSettings()
+    @State private var decryptionURLPattern = ""
+    @State private var decryptionBase64Key = ""
 
     init(featureID: String) {
         self.featureID = featureID
@@ -150,6 +158,10 @@ struct DebugSwiftNetworkInspectorView: View {
     var body: some View {
         VStack(spacing: 0) {
             actionBar
+
+            if featureID == "network_encryption" {
+                decryptionControls
+            }
 
             if featureID == "http" {
                 Picker("Traffic", selection: $selectedSource) {
@@ -199,7 +211,10 @@ struct DebugSwiftNetworkInspectorView: View {
             }
         }
         .navigationTitle(navigationTitle)
-        .onAppear { refresh() }
+        .onAppear {
+            refresh()
+            if featureID == "network_encryption" { refreshDecryptionSettings() }
+        }
         .alert("Clear request history?", isPresented: $confirmsClear) {
             Button("Cancel", role: .cancel) {}
             Button("Clear", role: .destructive) { perform("clear") }
@@ -246,6 +261,51 @@ struct DebugSwiftNetworkInspectorView: View {
         .background(Color.secondary.opacity(0.12))
     }
 
+    private var decryptionControls: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Toggle("Decrypt matching responses", isOn: Binding(
+                get: { decryptionSettings.isEnabled },
+                set: { setDecryptionEnabled($0) }
+            ))
+
+            Text("AES-GCM keys are matched against request URLs using regular expressions. New captured responses use this setting.")
+                .font(.caption)
+                .foregroundColor(.secondary)
+
+            TextField("URL regular expression", text: $decryptionURLPattern)
+                .textFieldStyle(.roundedBorder)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+
+            SecureField("Base64 AES key (16, 24, or 32 bytes)", text: $decryptionBase64Key)
+                .textFieldStyle(.roundedBorder)
+                .textInputAutocapitalization(.never)
+                .autocorrectionDisabled()
+
+            HStack {
+                Button("Register key") { registerDecryptionKey() }
+                    .disabled(decryptionURLPattern.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty || decryptionBase64Key.isEmpty)
+                Spacer()
+                Button("Clear keys", role: .destructive) { performDecryptionAction("clear_keys") }
+                    .disabled(decryptionSettings.patterns.isEmpty)
+            }
+
+            if !decryptionSettings.patterns.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("Registered URL patterns")
+                        .font(.caption.bold())
+                    ForEach(decryptionSettings.patterns, id: \.self) { pattern in
+                        Text(pattern)
+                            .font(.system(.caption, design: .monospaced))
+                    }
+                }
+            }
+        }
+        .padding(.horizontal)
+        .padding(.vertical, 10)
+        .background(Color.secondary.opacity(0.08))
+    }
+
     private var successRate: Int {
         guard !statsRequests.isEmpty else { return 0 }
         return Int((Double(statsRequests.filter(\.isSuccess).count) / Double(statsRequests.count) * 100).rounded())
@@ -254,6 +314,7 @@ struct DebugSwiftNetworkInspectorView: View {
     private var navigationTitle: String {
         switch featureID {
         case "graphql": "GraphQL"
+        case "network_encryption": "Response Decryption"
         case "har_export": "HAR Export"
         case "webview_network": "WebView Network"
         default: "Network"
@@ -290,6 +351,42 @@ struct DebugSwiftNetworkInspectorView: View {
             requestID: requestID
         )
         refresh()
+    }
+
+    private func refreshDecryptionSettings() {
+        let json = DebugSwiftAndroidRuntime.networkDecryptionSettings()
+        guard let data = json.data(using: .utf8),
+              let settings = try? JSONDecoder().decode(DebugSwiftNetworkDecryptionSettings.self, from: data) else {
+            decryptionSettings = DebugSwiftNetworkDecryptionSettings()
+            return
+        }
+        decryptionSettings = settings
+    }
+
+    private func setDecryptionEnabled(_ enabled: Bool) {
+        performDecryptionAction("set_enabled", value: enabled ? "true" : "false")
+    }
+
+    private func registerDecryptionKey() {
+        let pattern = decryptionURLPattern.trimmingCharacters(in: .whitespacesAndNewlines)
+        let key = decryptionBase64Key.trimmingCharacters(in: .whitespacesAndNewlines)
+        let message = DebugSwiftAndroidRuntime.performNetworkDecryptionAction(
+            actionID: "register_key",
+            value: "\(pattern):\(key)"
+        )
+        statusMessage = message
+        if message.hasPrefix("AES-GCM key registered") {
+            decryptionURLPattern = ""
+            decryptionBase64Key = ""
+        }
+        refreshDecryptionSettings()
+        refresh()
+        statusMessage = message
+    }
+
+    private func performDecryptionAction(_ actionID: String, value: String = "") {
+        statusMessage = DebugSwiftAndroidRuntime.performNetworkDecryptionAction(actionID: actionID, value: value)
+        refreshDecryptionSettings()
     }
 
     static func formatDuration(_ milliseconds: Int) -> String {
@@ -593,6 +690,28 @@ private extension String {
 }
 
 extension DebugSwiftAndroidRuntime {
+    @MainActor
+    static func networkDecryptionSettings() -> String {
+        #if os(Android)
+        return DebugSwiftNativeBridge.networkDecryptionSettingsJSON()
+        #elseif os(iOS)
+        return DebugSwift.Network.shared.sharedDecryptionSettingsJSON()
+        #else
+        return "{\"isEnabled\":false,\"patterns\":[]}"
+        #endif
+    }
+
+    @MainActor
+    static func performNetworkDecryptionAction(actionID: String, value: String = "") -> String {
+        #if os(Android)
+        return DebugSwiftNativeBridge.performNetworkDecryptionAction(actionID, value)
+        #elseif os(iOS)
+        return DebugSwift.Network.shared.performSharedDecryptionAction(actionID: actionID, value: value)
+        #else
+        return "Response decryption is unavailable."
+        #endif
+    }
+
     @MainActor
     static func networkInspectorSnapshot(featureID: String) -> String {
         #if os(Android)

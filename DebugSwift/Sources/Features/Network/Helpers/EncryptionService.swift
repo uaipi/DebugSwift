@@ -23,18 +23,22 @@ final class EncryptionService: EncryptionServiceProtocol, @unchecked Sendable {
     
     private var decryptionKeys: [String: Data] = [:]
     private var customDecryptors: [String: (Data) -> Data?] = [:]
+    private let keyLock = NSLock()
+    private let customDecryptorLock = NSLock()
     
     private init() {}
     
     func decrypt(_ data: Data, using key: Data?) -> Data? {
-        guard let key = key else { return nil }
-        
-        if key.count == 32 {
-            return decryptAES256(data, key: key)
-        } else if key.count == 16 {
-            return decryptAES128(data, key: key)
+        guard let key, [16, 24, 32].contains(key.count) else { return nil }
+
+        let payload = decodedBase64Payload(data) ?? data
+        if let decrypted = decryptAESGCM(payload, key: key) {
+            return decrypted
         }
-        
+
+        // Preserve the legacy 16-byte IV path for existing iOS integrations.
+        if key.count == 32 { return decryptAES256(payload, key: key) }
+        if key.count == 16 { return decryptAES128(payload, key: key) }
         return nil
     }
     
@@ -52,10 +56,20 @@ final class EncryptionService: EncryptionServiceProtocol, @unchecked Sendable {
     func getDecryptionKey(for url: URL?) -> Data? {
         guard let url = url else { return nil }
         
-        let urlString = url.absoluteString.lowercased()
-        
-        for (pattern, key) in decryptionKeys {
-            if urlString.contains(pattern.lowercased()) {
+        let urlString = url.absoluteString
+        keyLock.lock()
+        let registeredKeys = decryptionKeys
+        keyLock.unlock()
+
+        for (pattern, key) in registeredKeys {
+            let isMatch: Bool
+            if let expression = try? NSRegularExpression(pattern: pattern, options: [.caseInsensitive]) {
+                let range = NSRange(urlString.startIndex..<urlString.endIndex, in: urlString)
+                isMatch = expression.firstMatch(in: urlString, options: [], range: range) != nil
+            } else {
+                isMatch = urlString.localizedCaseInsensitiveContains(pattern)
+            }
+            if isMatch {
                 return key
             }
         }
@@ -64,20 +78,39 @@ final class EncryptionService: EncryptionServiceProtocol, @unchecked Sendable {
     }
     
     func registerDecryptionKey(for urlPattern: String, key: Data) {
+        keyLock.lock()
+        defer { keyLock.unlock() }
         decryptionKeys[urlPattern] = key
+    }
+
+    func registeredDecryptionKeyPatterns() -> [String] {
+        keyLock.lock()
+        defer { keyLock.unlock() }
+        return decryptionKeys.keys.sorted()
+    }
+
+    func clearDecryptionKeys() {
+        keyLock.lock()
+        defer { keyLock.unlock() }
+        decryptionKeys.removeAll()
     }
     
     func registerCustomDecryptor(for urlPattern: String, decryptor: @escaping (Data) -> Data?) {
+        customDecryptorLock.lock()
+        defer { customDecryptorLock.unlock() }
         customDecryptors[urlPattern] = decryptor
     }
     
     func customDecrypt(_ data: Data, for url: URL?) -> Data? {
         guard let url = url else { return nil }
         
-        let urlString = url.absoluteString.lowercased()
-        
-        for (pattern, decryptor) in customDecryptors {
-            if urlString.contains(pattern.lowercased()) {
+        let urlString = url.absoluteString
+        customDecryptorLock.lock()
+        let registeredDecryptors = customDecryptors
+        customDecryptorLock.unlock()
+
+        for (pattern, decryptor) in registeredDecryptors {
+            if urlString.localizedCaseInsensitiveContains(pattern) {
                 return decryptor(data)
             }
         }
@@ -99,6 +132,21 @@ final class EncryptionService: EncryptionServiceProtocol, @unchecked Sendable {
         } catch {
             return decryptAESCBC(encryptedData, key: key, iv: Data(iv))
         }
+    }
+
+    private func decryptAESGCM(_ data: Data, key: Data) -> Data? {
+        guard data.count >= 28 else { return nil }
+        do {
+            let sealedBox = try AES.GCM.SealedBox(combined: data)
+            return try AES.GCM.open(sealedBox, using: SymmetricKey(data: key))
+        } catch {
+            return nil
+        }
+    }
+
+    private func decodedBase64Payload(_ data: Data) -> Data? {
+        guard let text = String(data: data, encoding: .utf8) else { return nil }
+        return Data(base64Encoded: text.trimmingCharacters(in: .whitespacesAndNewlines), options: .ignoreUnknownCharacters)
     }
     
     private func decryptAES128(_ data: Data, key: Data) -> Data? {

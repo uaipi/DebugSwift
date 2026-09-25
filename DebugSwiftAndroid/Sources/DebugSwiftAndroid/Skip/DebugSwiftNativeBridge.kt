@@ -25,6 +25,13 @@ object DebugSwiftNativeBridge {
         AndroidDebugTools.performNetworkInspectorAction(featureID, actionID, requestID)
 
     @JvmStatic
+    fun networkDecryptionSettingsJSON(): String = DebugSwiftNetworkConfig.decryptionSettingsJSON()
+
+    @JvmStatic
+    fun performNetworkDecryptionAction(actionID: String, value: String): String =
+        DebugSwiftNetworkConfig.performDecryptionAction(actionID, value)
+
+    @JvmStatic
     fun networkInjectionSettingsJSON(): String = AndroidDebugTools.networkInjectionSettingsJSON()
 
     @JvmStatic

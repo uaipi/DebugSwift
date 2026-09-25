@@ -626,6 +626,10 @@ object AndroidDebugTools {
                 DebugSwiftNetworkConfig.clearAESKeys()
                 "Response decryption keys cleared from this process."
             }
+            "set_decryption_enabled" -> value.toBooleanStrictOrNull()?.let {
+                DebugSwiftNetworkConfig.setDecryptionEnabled(it)
+                "Response decryption ${if (it) "enabled" else "disabled"}. New captured responses use this setting."
+            } ?: "Set response decryption to true or false."
             "set_preference" -> writePreference(context, value)
             "delete_preference" -> deletePreference(context, value)
             "clear_preferences" -> clearPreferenceStore(context, value)
@@ -1863,7 +1867,7 @@ object AndroidDebugTools {
             return "Captured requests available for HAR export: $count\nUse Export to write a .har file into the app cache."
         }
         if (featureID == "network_encryption") {
-            return "Registered body decryptors: ${DebugSwiftNetworkConfig.decryptors.size}\nHost-supplied keys are kept in memory for this process."
+            return "Response decryption: ${if (DebugSwiftNetworkConfig.isDecryptionEnabled()) "enabled" else "disabled"}\nRegistered URL patterns: ${DebugSwiftNetworkConfig.decryptors.size}\nKeys are kept in memory for this process."
         }
         val historyDescription = if (featureID == "network_history") {
             "WebSocket connections: ${webSocketConnections.size} · frames: ${webSocketConnections.sumOf { it.frames.size }}\nUp to 100 recent HTTP requests are restored from app-private storage; this process keeps at most $MAX_RECORDS.\n"
@@ -4245,12 +4249,51 @@ object AndroidDebugTools {
 object DebugSwiftNetworkConfig {
     val decryptors = CopyOnWriteArrayList<String>()
     private val encryptionKeys = mutableMapOf<String, SecretKey>()
+    @Volatile private var decryptionEnabled = false
 
     /** Read the settings currently used by DebugSwiftOkHttpInterceptor. */
     fun networkInjectionSettingsJSON(): String = AndroidDebugTools.networkInjectionSettingsJSON()
 
     /** Apply the same JSON configuration edited by the shared Network Injection screen. */
     fun applyNetworkInjectionSettingsJSON(json: String): String = AndroidDebugTools.applyNetworkInjectionSettingsJSON(json)
+
+    fun isDecryptionEnabled(): Boolean = decryptionEnabled
+
+    fun setDecryptionEnabled(enabled: Boolean) {
+        decryptionEnabled = enabled
+    }
+
+    fun decryptionSettingsJSON(): String = JSONObject()
+        .put("isEnabled", decryptionEnabled)
+        .put("patterns", JSONArray(decryptors.sorted()))
+        .toString()
+
+    fun performDecryptionAction(actionID: String, value: String): String = when (actionID) {
+        "set_enabled" -> value.toBooleanStrictOrNull()?.let {
+            setDecryptionEnabled(it)
+            "Response decryption ${if (it) "enabled" else "disabled"}. New captured responses use this setting."
+        } ?: "Set response decryption to true or false."
+        "register_key" -> {
+            val separator = value.lastIndexOf(':')
+            val pattern = value.substringBeforeLast(':').trim()
+            val encodedKey = value.substringAfterLast(':').trim()
+            val key = runCatching {
+                android.util.Base64.decode(encodedKey, android.util.Base64.DEFAULT)
+            }.getOrNull()
+            if (separator <= 0 || pattern.isBlank() || key == null) {
+                "Enter a URL regex followed by ':' and a base64 AES key."
+            } else if (registerAESKey(pattern, key)) {
+                "AES-GCM key registered for URL regex '$pattern'."
+            } else {
+                "Enter a valid URL regex and a base64 AES key containing 16, 24, or 32 bytes."
+            }
+        }
+        "clear_keys" -> {
+            clearAESKeys()
+            "Response decryption keys cleared from this process."
+        }
+        else -> "Unknown response decryption action: $actionID."
+    }
 
     fun registerAESKey(urlPattern: String, encodedKey: ByteArray): Boolean {
         if (encodedKey.size !in listOf(16, 24, 32)) {
@@ -4274,12 +4317,15 @@ object DebugSwiftNetworkConfig {
     }
 
     fun decryptResponse(url: String, encodedBody: String): String? {
+        if (!decryptionEnabled) return null
         val encrypted = runCatching {
             android.util.Base64.decode(encodedBody.trim(), android.util.Base64.DEFAULT)
         }.getOrNull() ?: return null
         if (encrypted.size <= 12) return null
         val matchingPatterns = synchronized(encryptionKeys) {
-            encryptionKeys.keys.filter { pattern -> runCatching { Regex(pattern).containsMatchIn(url) }.getOrDefault(false) }
+            encryptionKeys.keys.filter { pattern ->
+                runCatching { Regex(pattern, RegexOption.IGNORE_CASE).containsMatchIn(url) }.getOrDefault(false)
+            }
         }
         for (pattern in matchingPatterns) {
             val cleartext = decryptAESGCM(pattern, encrypted.copyOfRange(0, 12), encrypted.copyOfRange(12, encrypted.size))

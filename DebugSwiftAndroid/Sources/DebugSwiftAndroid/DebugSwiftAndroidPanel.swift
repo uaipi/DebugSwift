@@ -273,11 +273,11 @@ private struct DebugSwiftFeatureDestination: View {
             DebugSwiftNetworkInjectionView()
         } else if feature.id == "console" {
             DebugSwiftConsoleView()
-        } else if ["http", "graphql", "har_export", "webview_network"].contains(feature.id) {
+        } else if ["http", "graphql", "network_encryption", "har_export", "webview_network"].contains(feature.id) {
             DebugSwiftNetworkInspectorView(featureID: feature.id)
         } else if feature.id == "websocket" {
             DebugSwiftWebSocketInspectorView()
-        } else if ["network_encryption", "network_history"].contains(feature.id) {
+        } else if feature.id == "network_history" {
             DebugSwiftIOSNativeNetworkHost(featureID: feature.id)
                 .ignoresSafeArea(edges: .bottom)
         } else if ["performance_overview", "performance_widget", "battery", "disk", "memory_warning", "frame_drops", "hangs", "backtraces", "leaks", "thread_checker", "super_calls"].contains(feature.id) {
@@ -319,7 +319,7 @@ private struct DebugSwiftFeatureDestination: View {
             DebugSwiftWebSocketInspectorView()
         } else if feature.id == "console" {
             DebugSwiftConsoleView()
-        } else if ["http", "graphql", "har_export", "webview_network"].contains(feature.id) {
+        } else if ["http", "graphql", "network_encryption", "har_export", "webview_network"].contains(feature.id) {
             DebugSwiftNetworkInspectorView(featureID: feature.id)
         } else {
             DebugSwiftFeatureDetail(feature: feature)
