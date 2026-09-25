@@ -202,7 +202,7 @@ enum DebugSwiftArea: String, CaseIterable, Identifiable, Hashable {
                 .init("oslog_console", "System Log", "Browse this app's Android Logcat records, filter messages, and export the results."),
                 .init("device_info", "Device Info", "Inspect app version, Android version, device, display, and memory details."),
                 .init("push_token", "Push Token", "Register and display an app-provided Firebase Cloud Messaging token."),
-                .init("push_simulator", "Push Simulator", "Create local notification scenarios for app testing."),
+                .init("push_simulator", "Push Notifications", "Manage notification permissions, templates, test scenarios, settings, and delivery history."),
                 .init("custom_actions", "Custom Actions", "Register host-app actions and run them from the debugger."),
                 .init("custom_info", "Custom Info", "Display diagnostic values supplied by the host app."),
                 .init("deep_links", "Deep Links", "Inspect the current intent URI and registered app link information."),
@@ -514,7 +514,7 @@ struct DebugSwiftFeatureDetail: View {
         case "touches", "view_borders", "thread_checker", "performance_widget":
             ["refresh", "toggle", "capture"]
         case "push_simulator":
-            ["refresh", "notify"]
+            ["refresh", "toggle", "notify", "simulate_template", "run_scenario", "set_notification_config", "add_template", "remove_template", "history_page", "interact_notification", "resend_notification", "remove_notification", "clear_push_history", "export", "open_notification_settings"]
         case "custom_actions":
             ["refresh", "run_custom"]
         case "custom_info":
@@ -534,7 +534,7 @@ struct DebugSwiftFeatureDetail: View {
         case "grid": "Spacing dp, optional color: 24,#663399FF"
         case "preferences", "persistent_data": "Store|key=value to write; Store|key to remove; Store|CLEAR to delete all"
         case "files": "App path: files/, cache/, or databases/"
-        case "push_simulator": "Notification title | message | delay in seconds"
+        case "push_simulator": "Notification command or ID"
         case "sqlite", "core_data", "swift_data": "Database name|SQL statement"
         case "custom_actions": "Registered action title"
         case "custom_info": "Name=value"
@@ -550,7 +550,7 @@ struct DebugSwiftFeatureDetail: View {
         case "export": "Export"
         case "filter_requests": "Apply filter"
         case "filter_logs": "Apply log filter"
-        case "toggle": feature.id == "network_thresholds" ? "Toggle request blocking" : feature.id == "agent_debug_log" ? "Start / stop capture" : feature.id == "dark_mode" ? "Toggle dark appearance" : "Enable / disable"
+        case "toggle": feature.id == "network_thresholds" ? "Toggle request blocking" : feature.id == "agent_debug_log" ? "Start / stop capture" : feature.id == "dark_mode" ? "Toggle dark appearance" : feature.id == "push_simulator" ? "Enable / disable simulation" : "Enable / disable"
         case "reset_dark_mode": "Follow system appearance"
         case "set_delay": "Set request delay"
         case "inject_failure": "Fail next request"
@@ -567,6 +567,17 @@ struct DebugSwiftFeatureDetail: View {
         case "clear_preferences": "Clear store (enter Store|CLEAR)"
         case "browse_files": "Open path"
         case "notify": "Post test notification"
+        case "simulate_template": "Simulate from template"
+        case "run_scenario": "Run test scenario"
+        case "set_notification_config": "Update notification setting"
+        case "add_template": "Add notification template"
+        case "remove_template": "Remove notification template"
+        case "history_page": "History page"
+        case "interact_notification": "Simulate notification tap"
+        case "resend_notification": "Send notification again"
+        case "remove_notification": "Remove notification by ID"
+        case "clear_push_history": "Clear history (enter CLEAR)"
+        case "open_notification_settings": "Open notification permissions"
         case "open_animation_settings": "Open Developer options"
         case "run_query": "Run SQL query"
         case "run_custom": "Run registered action"

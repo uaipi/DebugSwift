@@ -37,6 +37,28 @@ Add `DebugSwiftOkHttpInterceptor()` to each OkHttp client whose traffic should b
 
 The runtime also exposes host hooks for custom actions and diagnostic values (`registerAction`, `registerInfo`), FCM tokens (`reportPushToken`), location (`reportLocation`), Room databases, and Realm projections (`DebugSwiftRealmRegistry.register`). Forward Activity touch events to `AndroidDebugTools.recordTouch(event)` and wrap a Compose subtree in `DebugSwiftComposeProbe` to collect those interface diagnostics.
 
+### Push notification simulation
+
+The Push Notifications tool supports local notifications without an FCM server. Add `POST_NOTIFICATIONS` to the host manifest and enable the simulator before posting. Android 13 and newer request permission at runtime:
+
+```kotlin
+AndroidDebugTools.setPushSimulationEnabled(true)
+AndroidDebugTools.simulatePushNotification(
+    title = "New Message",
+    body = "You have a message from Alex",
+    subtitle = "Inbox",
+    delaySeconds = 3,
+    userInfo = mapOf("type" to "message", "sender" to "Alex")
+)
+AndroidDebugTools.simulatePushNotificationFromTemplate("Message")
+AndroidDebugTools.runPushNotificationScenario("messageFlow")
+AndroidDebugTools.updatePushNotificationSetting("playSound", "false")
+```
+
+The panel's Create action accepts `title|body|delay|subtitle|badge|sound|category|key=value,key2=value2`. Scenarios are `messageFlow`, `newsUpdates`, `marketingCampaign`, `systemAlerts`, or a single `customFlow|title|body|delay`. The History page action browses all retained records in pages of 20; export includes the full history.
+
+Kotlin hosts can also use `simulateMessagePush`, `simulateReminderPush`, `simulateNewsPush`, and `simulateMarketingPush`; manage detailed templates with `addPushNotificationTemplate` and `removePushNotificationTemplate`; and inspect, clear, remove, resend, or mark a notification interacted with through the corresponding `AndroidDebugTools` methods. Delayed local notifications run while the app process remains alive. Configuration, templates, and notification history are stored in app-private preferences.
+
 Use `DebugSwiftAndroidRuntime.log("message")` or `AndroidDebugTools.log("message")` to add app messages to Console. The optional Agent Debug Log can be enabled in the panel; it writes NDJSON to the app-private `files/agent-debug.ndjson` and can be exported from the same screen. The Performance Widget draws live metrics inside the host Activity. Grid spacing and color are set in the Grid Overlay detail, for example `24,#663399FF`.
 
 ## Platform equivalents

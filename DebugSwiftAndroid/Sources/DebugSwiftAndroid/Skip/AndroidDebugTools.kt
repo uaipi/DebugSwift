@@ -5,6 +5,7 @@ import android.app.ActivityManager
 import android.app.Application
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
@@ -20,6 +21,7 @@ import android.os.Handler
 import android.os.Looper
 import android.os.Process
 import android.os.SystemClock
+import android.net.Uri
 import android.util.Log
 import android.view.Choreographer
 import android.view.MotionEvent
@@ -43,13 +45,17 @@ import java.util.Locale
 import java.util.UUID
 import java.util.zip.ZipFile
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
+import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import javax.crypto.SecretKey
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
+import org.json.JSONArray
+import org.json.JSONObject
 import kotlin.math.PI
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -63,6 +69,9 @@ object AndroidDebugTools {
     private const val MAX_RECORDS = 500
     private const val MAIN_THREAD_STALL_MS = 700L
     private const val NOTIFICATION_CHANNEL = "debugswift_local_tests"
+    private const val PUSH_HISTORY_PAGE_SIZE = 20
+    private const val PUSH_STATE_PREFS = "DebugSwift.PushNotifications"
+    private const val PUSH_NOTIFICATION_ID_EXTRA = "debugswift_notification_id"
     private const val AGENT_LOG_FILENAME = "agent-debug.ndjson"
     private const val MAX_AGENT_LOG_BYTES = 5L * 1024L * 1024L
 
@@ -85,6 +94,12 @@ object AndroidDebugTools {
     private val slowFrameEvents = CopyOnWriteArrayList<String>()
     private val recentTouches = CopyOnWriteArrayList<Pair<Float, Float>>()
     private val recordedInteractions = CopyOnWriteArrayList<RecordedInteraction>()
+    private val pushHistory = CopyOnWriteArrayList<PushNotificationRecord>()
+    private val pushTemplates = CopyOnWriteArrayList<PushNotificationTemplate>()
+    private val pendingPushNotifications = ConcurrentHashMap<String, ScheduledFuture<*>>()
+    private val notificationExecutor = Executors.newSingleThreadScheduledExecutor { task ->
+        Thread(task, "DebugSwiftNotifications").apply { isDaemon = true }
+    }
     private val registeredPreferences = CopyOnWriteArrayList<String>()
     private val customInfo = linkedMapOf<String, String>()
     private val customActions = linkedMapOf<String, () -> Unit>()
@@ -105,6 +120,20 @@ object AndroidDebugTools {
     @Volatile private var simulatedMemoryWarningCount = 0
     private var lastLocation = "No location has been reported by the host app."
     private var pushToken = "No FCM token has been reported by the host app."
+    @Volatile private var pushStateLoaded = false
+    @Volatile private var pushEnabled = false
+    @Volatile private var pushShowInForeground = true
+    @Volatile private var pushPlaySound = true
+    @Volatile private var pushShowBadge = true
+    @Volatile private var pushAutoInteraction = false
+    @Volatile private var pushInteractionDelaySeconds = 3.0
+    @Volatile private var pushSimulateRealPush = false
+    @Volatile private var pushDefaultSound = "default"
+    @Volatile private var pushMaxHistoryCount = 100
+    @Volatile private var appInForeground = false
+    @Volatile private var pushHistoryPage = 1
+    @Volatile private var androidNotificationsEnabled = true
+    @Volatile private var androidNotificationSettingsLoaded = false
     private var thresholdLimit = 0
     private var thresholdWindowMs = 60_000L
     private var thresholdStartMs = 0L
@@ -136,6 +165,35 @@ object AndroidDebugTools {
         val source: String
     )
 
+    private data class PushNotificationRecord(
+        val id: String,
+        val title: String,
+        val body: String,
+        val subtitle: String?,
+        val badge: Int?,
+        val sound: String?,
+        val category: String?,
+        val userInfo: Map<String, String>,
+        val scheduledAtMs: Long,
+        val deliveryAtMs: Long?,
+        val status: String,
+        val trigger: String,
+        val interactionType: String?
+    )
+
+    private data class PushNotificationTemplate(
+        val id: String,
+        val name: String,
+        val title: String,
+        val body: String,
+        val subtitle: String?,
+        val badge: Int?,
+        val sound: String?,
+        val category: String?,
+        val userInfo: Map<String, String>,
+        val isDefault: Boolean
+    )
+
     private data class RecordedInteraction(
         val kind: String,
         val startX: Float,
@@ -154,6 +212,7 @@ object AndroidDebugTools {
         val applicationContext = context.applicationContext
         if (appContext === applicationContext) return
         appContext = applicationContext
+        loadPushState(applicationContext)
         restoreAppearanceOverride(applicationContext)
         loadNetworkHistory(applicationContext)
         loadCrashHistory(applicationContext)
@@ -161,7 +220,8 @@ object AndroidDebugTools {
         installCrashHandler()
         startAnrWatchdog()
         startFrameMonitor()
-        ensureNotificationChannel(applicationContext)
+        notificationExecutor.execute { ensureNotificationChannel(applicationContext) }
+        refreshNotificationSettings(applicationContext)
         log("DebugSwift Android runtime installed on ${Build.MANUFACTURER} ${Build.MODEL}")
     }
 
@@ -185,6 +245,127 @@ object AndroidDebugTools {
         log("FCM registration token received from host app")
     }
 
+    @JvmStatic
+    fun setPushSimulationEnabled(enabled: Boolean): String {
+        val context = appContext ?: return "Android runtime has not been installed."
+        if (pushEnabled == enabled) return "Push notification simulation is already ${if (enabled) "enabled" else "disabled"}."
+        return togglePushSimulation(context)
+    }
+
+    @JvmStatic
+    fun isPushSimulationEnabled(): Boolean = pushEnabled
+
+    @JvmStatic
+    fun simulatePushNotification(
+        title: String,
+        body: String,
+        delaySeconds: Long = 0,
+        subtitle: String? = null,
+        badge: Int? = null,
+        sound: String? = null,
+        category: String? = null,
+        userInfo: Map<String, String> = emptyMap()
+    ): String {
+        val context = appContext ?: return "Android runtime has not been installed."
+        return schedulePushNotification(context, title, body, delaySeconds, subtitle, badge, sound, category, userInfo)
+    }
+
+    @JvmStatic
+    fun simulateMessagePush(sender: String, message: String): String =
+        simulatePushNotification("New Message", message, subtitle = "From $sender", userInfo = mapOf("type" to "message", "sender" to sender))
+
+    @JvmStatic
+    fun simulateReminderPush(task: String, delaySeconds: Long = 0): String =
+        simulatePushNotification("Reminder", "Don't forget: $task", delaySeconds, badge = 1, userInfo = mapOf("type" to "reminder", "task" to task))
+
+    @JvmStatic
+    fun simulateNewsPush(headline: String, category: String = "General"): String =
+        simulatePushNotification("Breaking News", headline, subtitle = category, userInfo = mapOf("type" to "news", "category" to category))
+
+    @JvmStatic
+    fun simulateMarketingPush(title: String, offer: String, discount: String? = null): String {
+        val info = mutableMapOf("type" to "marketing", "offer" to offer)
+        if (discount != null) info["discount"] = discount
+        return simulatePushNotification(title, offer, subtitle = discount?.let { "$it% off" }, badge = 1, userInfo = info)
+    }
+
+    @JvmStatic
+    fun simulatePushNotificationFromTemplate(name: String, delaySeconds: Long = 0): String {
+        val context = appContext ?: return "Android runtime has not been installed."
+        return simulatePushTemplate(context, "$name|$delaySeconds")
+    }
+
+    @JvmStatic
+    fun runPushNotificationScenario(name: String): String {
+        val context = appContext ?: return "Android runtime has not been installed."
+        return runPushScenario(context, name)
+    }
+
+    @JvmStatic
+    fun updatePushNotificationSetting(name: String, value: String): String {
+        val context = appContext ?: return "Android runtime has not been installed."
+        return setPushConfiguration(context, "$name=$value")
+    }
+
+    @JvmStatic
+    fun addPushNotificationTemplate(
+        name: String,
+        title: String,
+        body: String,
+        subtitle: String? = null,
+        badge: Int? = null,
+        sound: String? = null,
+        category: String? = null,
+        userInfo: Map<String, String> = emptyMap()
+    ): String {
+        val context = appContext ?: return "Android runtime has not been installed."
+        if (name.isBlank() || title.isBlank() || body.isBlank()) return "Template name, title, and body cannot be empty."
+        return storePushTemplate(context, PushNotificationTemplate(UUID.randomUUID().toString(), name, title, body, subtitle, badge, sound, category, userInfo, false))
+    }
+
+    @JvmStatic
+    fun removePushNotificationTemplate(name: String): String {
+        val context = appContext ?: return "Android runtime has not been installed."
+        return removePushTemplate(context, name)
+    }
+
+    @JvmStatic
+    fun clearPushNotificationHistory(): String = clearPushHistory()
+
+    @JvmStatic
+    fun removeSimulatedPushNotification(id: String): String {
+        val context = appContext ?: return "Android runtime has not been installed."
+        return removePushNotification(context, id)
+    }
+
+    @JvmStatic
+    fun simulatePushNotificationInteraction(id: String): String {
+        val context = appContext ?: return "Android runtime has not been installed."
+        return interactWithPushNotification(context, id)
+    }
+
+    @JvmStatic
+    fun simulateForegroundPushNotification(id: String): String {
+        if (pushHistory.none { it.id == id }) return "No simulated notification with ID '$id'."
+        publishEvent("app", "Simulated foreground notification: $id")
+        return "Foreground notification simulation recorded for $id."
+    }
+
+    @JvmStatic
+    fun simulateBackgroundPushNotification(id: String): String {
+        val context = appContext ?: return "Android runtime has not been installed."
+        if (pushHistory.none { it.id == id }) return "No simulated notification with ID '$id'."
+        updatePushNotification(context, id, "Delivered")
+        publishEvent("app", "Simulated background notification: $id")
+        return "Background notification simulation recorded for $id."
+    }
+
+    @JvmStatic
+    fun pushNotificationSnapshot(): String {
+        val context = appContext ?: return "Android runtime has not been installed."
+        return pushNotificationSnapshot(context)
+    }
+
     fun reportLocation(latitude: Double, longitude: Double, accuracyMeters: Float) {
         lastLocation = "Latitude: $latitude\nLongitude: $longitude\nAccuracy: ${accuracyMeters}m"
         publishEvent("app", "Location updated")
@@ -206,10 +387,21 @@ object AndroidDebugTools {
         val context = appContext ?: return "Android runtime has not been installed."
         return when (actionID) {
             "clear" -> clear(featureID)
+            "clear_push_history" -> if (value.trim() == "CLEAR") clearPushHistory() else "Type CLEAR to remove notification history."
             "capture" -> capture(featureID)
             "toggle" -> if (featureID == "dark_mode") toggleDarkMode(context) else toggle(featureID)
             "export" -> export(featureID, context)
             "notify" -> sendLocalNotification(context, value)
+            "simulate_template" -> simulatePushTemplate(context, value)
+            "run_scenario" -> runPushScenario(context, value)
+            "set_notification_config" -> setPushConfiguration(context, value)
+            "add_template" -> addPushTemplate(context, value)
+            "remove_template" -> removePushTemplate(context, value)
+            "remove_notification" -> removePushNotification(context, value)
+            "interact_notification" -> interactWithPushNotification(context, value)
+            "resend_notification" -> resendPushNotification(context, value)
+            "history_page" -> showPushHistoryPage(context, value)
+            "open_notification_settings" -> openNotificationSettings(context)
             "refresh" -> snapshot(featureID)
             "set_delay" -> value.toLongOrNull()?.let { setRequestDelay(it); "Request delay set to ${requestDelayMs}ms." } ?: "Enter the delay in milliseconds."
             "inject_failure" -> { failNextNetworkRequest(); "The next instrumented HTTP request will fail." }
@@ -946,7 +1138,7 @@ object AndroidDebugTools {
             "console" -> consoleRecords.takeLast(100).asReversed().joinToString("\n").ifEmpty { "No messages captured. Use DebugSwiftAndroidRuntime.log() from the host app." }
             "oslog_console" -> logcatSnapshot()
             "push_token" -> pushToken
-            "push_simulator" -> "Create a local Android notification without an FCM server. Enter title | message | optional delay seconds, then choose Post test notification.\nChannel: $NOTIFICATION_CHANNEL"
+            "push_simulator" -> pushNotificationSnapshot(context)
             "custom_actions" -> synchronized(customActions) { customActions.keys.toList() }.joinToString("\n").ifEmpty { "No custom actions registered by the host app." }
             "custom_info" -> synchronized(customInfo) { customInfo.entries.joinToString("\n") { "${it.key}: ${it.value}" } }.ifEmpty { "No host diagnostic values registered." }
             "deep_links" -> lastIntentDescription.ifEmpty { "No deep-link intent received. Call reportIntent(intent) from your host Activity." }
@@ -1029,6 +1221,7 @@ object AndroidDebugTools {
                 lastRecordingPath = ""
             }
             "color_palette" -> lastPalette = emptyList()
+            "push_simulator" -> return clearPushHistory()
             else -> {
                 return "$featureID has no history to clear."
             }
@@ -1060,6 +1253,7 @@ object AndroidDebugTools {
     }
 
     private fun toggle(featureID: String): String {
+        if (featureID == "push_simulator") return togglePushSimulation(appContext!!)
         val enabled = synchronized(enabledTools) {
             if (featureID in enabledTools) {
                 enabledTools.remove(featureID)
@@ -1099,6 +1293,7 @@ object AndroidDebugTools {
             "crashes" -> File(context.cacheDir, "debugswift-crashes-${System.currentTimeMillis()}.txt").apply { writeText(crashRecords.joinToString("\n\n")) }
             "files" -> exportCurrentFile(context)
             "preferences", "persistent_data" -> File(context.cacheDir, "debugswift-${featureID}-${System.currentTimeMillis()}.txt").apply { writeText(snapshot(featureID)) }
+            "push_simulator" -> File(context.cacheDir, "debugswift-push-notifications-${System.currentTimeMillis()}.txt").apply { writeText(pushNotificationSnapshot(context, showAllHistory = true)) }
             "color_palette" -> File(context.cacheDir, "debugswift-palette-${System.currentTimeMillis()}.txt").apply { writeText(lastPalette.joinToString("\n")) }
             "sqlite", "core_data", "swift_data" -> File(context.cacheDir, "debugswift-resources-${System.currentTimeMillis()}.txt").apply { writeText(snapshot(featureID)) }
             "doc_recorder" -> File(lastRecordingPath).takeIf { lastRecordingPath.isNotEmpty() && it.exists() }
@@ -1121,11 +1316,14 @@ object AndroidDebugTools {
             override fun onActivityResumed(activity: Activity) {
                 val previous = foregroundActivity.get()
                 foregroundActivity = WeakReference(activity)
+                appInForeground = true
+                appContext?.let(::refreshNotificationSettings)
                 if (previous !== activity) updateOverlay()
                 publishEvent("app", "Activity resumed: ${activity.javaClass.simpleName}")
             }
 
             override fun onActivityPaused(activity: Activity) {
+                if (foregroundActivity.get() === activity) appInForeground = false
                 publishEvent("app", "Activity paused: ${activity.javaClass.simpleName}")
             }
 
@@ -1418,32 +1616,38 @@ object AndroidDebugTools {
     }
 
     private fun sendLocalNotification(context: Context, value: String = ""): String {
-        val parts = value.split("|", limit = 3)
+        val parts = value.split("|", limit = 8).map { it.trim() }
         val title = parts.getOrNull(0)?.trim()?.takeIf { it.isNotEmpty() } ?: "DebugSwift test notification"
         val message = parts.getOrNull(1)?.trim()?.takeIf { it.isNotEmpty() } ?: "Local push simulation · ${timestamp()}"
-        val delaySeconds = parts.getOrNull(2)?.trim()?.toLongOrNull() ?: 0L
+        val delayValue = parts.getOrNull(2)?.trim().orEmpty()
+        val delaySeconds = delayValue.toLongOrNull() ?: if (delayValue.isBlank()) 0L else return "Delay must be a whole number of seconds."
         if (delaySeconds < 0) return "Delay must be zero or more seconds."
-        val activity = foregroundActivity.get()
-        if (Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
-            activity?.requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 5081)
-            return "Notification permission requested. Press Capture again after granting it."
+        val badgeValue = parts.getOrNull(4).orEmpty()
+        val badge = badgeValue.toIntOrNull() ?: if (badgeValue.isBlank()) null else return "Badge must be a whole number."
+        val userInfo = parsePushUserInfo(parts.getOrNull(7).orEmpty())
+            ?: return "User info must use key=value pairs separated by commas."
+        return schedulePushNotification(
+            context,
+            title,
+            message,
+            delaySeconds,
+            parts.getOrNull(3)?.takeIf { it.isNotBlank() },
+            badge,
+            parts.getOrNull(5)?.takeIf { it.isNotBlank() },
+            parts.getOrNull(6)?.takeIf { it.isNotBlank() },
+            userInfo
+        )
+    }
+
+    private fun parsePushUserInfo(value: String): Map<String, String>? {
+        if (value.isBlank()) return emptyMap()
+        val result = linkedMapOf<String, String>()
+        for (entry in value.split(",")) {
+            val pair = entry.split("=", limit = 2)
+            if (pair.size != 2 || pair[0].isBlank()) return null
+            result[pair[0].trim()] = pair[1].trim()
         }
-        val postNotification = {
-            val notification = NotificationCompat.Builder(context, NOTIFICATION_CHANNEL)
-                .setSmallIcon(android.R.drawable.ic_dialog_info)
-                .setContentTitle(title)
-                .setContentText(message)
-                .setAutoCancel(true)
-                .build()
-            NotificationManagerCompat.from(context).notify(System.currentTimeMillis().toInt(), notification)
-            publishEvent("app", "Local test notification posted: $title")
-        }
-        if (delaySeconds == 0L) {
-            postNotification()
-            return "Local test notification posted."
-        }
-        mainHandler.postDelayed({ postNotification() }, delaySeconds.coerceAtMost(86_400L) * 1_000L)
-        return "Local notification scheduled in ${delaySeconds.coerceAtMost(86_400L)} seconds."
+        return result
     }
 
     private fun ensureNotificationChannel(context: Context) {
@@ -1452,6 +1656,557 @@ object AndroidDebugTools {
             manager.createNotificationChannel(NotificationChannel(NOTIFICATION_CHANNEL, "DebugSwift tests", NotificationManager.IMPORTANCE_DEFAULT))
         }
     }
+
+    private fun loadPushState(context: Context) {
+        if (pushStateLoaded) return
+        synchronized(this) {
+            if (pushStateLoaded) return
+            val preferences = context.getSharedPreferences(PUSH_STATE_PREFS, Context.MODE_PRIVATE)
+            pushEnabled = false
+            pushShowInForeground = preferences.getBoolean("showInForeground", true)
+            pushPlaySound = preferences.getBoolean("playSound", true)
+            pushShowBadge = preferences.getBoolean("showBadge", true)
+            pushAutoInteraction = preferences.getBoolean("autoInteraction", false)
+            pushInteractionDelaySeconds = preferences.getFloat("interactionDelay", 3f).toDouble()
+            pushSimulateRealPush = preferences.getBoolean("simulateRealPush", false)
+            pushDefaultSound = preferences.getString("defaultSound", "default") ?: "default"
+            pushMaxHistoryCount = preferences.getInt("maxHistoryCount", 100).coerceIn(1, 1_000)
+            runCatching {
+                val historyJSON = JSONArray(preferences.getString("history", "[]") ?: "[]")
+                for (index in 0 until historyJSON.length()) {
+                    val json = historyJSON.getJSONObject(index)
+                    pushHistory.add(json.toPushRecord())
+                }
+            }
+            runCatching {
+                val templateJSON = JSONArray(preferences.getString("templates", "") ?: "")
+                for (index in 0 until templateJSON.length()) {
+                    pushTemplates.add(templateJSON.getJSONObject(index).toPushTemplate())
+                }
+            }
+            if (pushTemplates.isEmpty()) {
+                pushTemplates.addAll(defaultPushTemplates())
+                savePushTemplates(context)
+            }
+            pushHistory.replaceAll { record ->
+                if (record.status == "Scheduled") record.copy(status = "Failed") else record
+            }
+            savePushHistory(context)
+            pushStateLoaded = true
+        }
+    }
+
+    private fun defaultPushTemplates() = listOf(
+        PushNotificationTemplate("message", "Message", "New Message", "You have a new message from {{sender}}", null, null, null, null, mapOf("type" to "message", "sender" to "John Doe"), true),
+        PushNotificationTemplate("news", "News Update", "Breaking News", "{{headline}}", "{{category}}", null, null, null, mapOf("type" to "news", "headline" to "Major technology breakthrough announced", "category" to "Technology"), true),
+        PushNotificationTemplate("reminder", "Reminder", "Reminder", "Don't forget: {{task}}", null, 1, null, null, mapOf("type" to "reminder", "task" to "your task"), true),
+        PushNotificationTemplate("marketing", "Marketing", "Special Offer! 🎉", "Get {{discount}}% off your next purchase", "Limited time offer", 1, null, null, mapOf("type" to "marketing", "discount" to "50"), true),
+        PushNotificationTemplate("system", "System Alert", "System Notification", "{{message}}", null, null, "default", null, mapOf("type" to "system", "message" to "System alert"), true)
+    )
+
+    private fun pushPreferences(context: Context) =
+        context.getSharedPreferences(PUSH_STATE_PREFS, Context.MODE_PRIVATE)
+
+    private fun persistPushConfiguration(context: Context) {
+        pushPreferences(context).edit()
+            .putBoolean("showInForeground", pushShowInForeground)
+            .putBoolean("playSound", pushPlaySound)
+            .putBoolean("showBadge", pushShowBadge)
+            .putBoolean("autoInteraction", pushAutoInteraction)
+            .putFloat("interactionDelay", pushInteractionDelaySeconds.toFloat())
+            .putBoolean("simulateRealPush", pushSimulateRealPush)
+            .putString("defaultSound", pushDefaultSound)
+            .putInt("maxHistoryCount", pushMaxHistoryCount)
+            .apply()
+    }
+
+    private fun JSONObject.toPushRecord() = PushNotificationRecord(
+        id = optString("id", UUID.randomUUID().toString()),
+        title = optString("title"),
+        body = optString("body"),
+        subtitle = optString("subtitle").takeUnless { isNull("subtitle") || it.isBlank() },
+        badge = if (isNull("badge")) null else optInt("badge"),
+        sound = optString("sound").takeUnless { isNull("sound") || it.isBlank() },
+        category = optString("category").takeUnless { isNull("category") || it.isBlank() },
+        userInfo = jsonObjectToStringMap(optJSONObject("userInfo")),
+        scheduledAtMs = optLong("scheduledAtMs", System.currentTimeMillis()),
+        deliveryAtMs = if (isNull("deliveryAtMs")) null else optLong("deliveryAtMs"),
+        status = optString("status", "Scheduled"),
+        trigger = optString("trigger", "Immediate"),
+        interactionType = optString("interactionType").takeUnless { isNull("interactionType") || it.isBlank() }
+    )
+
+    private fun JSONObject.toPushTemplate() = PushNotificationTemplate(
+        id = optString("id", UUID.randomUUID().toString()),
+        name = optString("name"),
+        title = optString("title"),
+        body = optString("body"),
+        subtitle = optString("subtitle").takeUnless { isNull("subtitle") || it.isBlank() },
+        badge = if (isNull("badge")) null else optInt("badge"),
+        sound = optString("sound").takeUnless { isNull("sound") || it.isBlank() },
+        category = optString("category").takeUnless { isNull("category") || it.isBlank() },
+        userInfo = jsonObjectToStringMap(optJSONObject("userInfo")),
+        isDefault = optBoolean("isDefault", false)
+    )
+
+    private fun jsonObjectToStringMap(json: JSONObject?): Map<String, String> {
+        if (json == null) return emptyMap()
+        return json.keys().asSequence().associateWith { key -> json.optString(key) }
+    }
+
+    private fun pushRecordJSON(record: PushNotificationRecord) = JSONObject().apply {
+        put("id", record.id)
+        put("title", record.title)
+        put("body", record.body)
+        put("subtitle", record.subtitle ?: JSONObject.NULL)
+        put("badge", record.badge ?: JSONObject.NULL)
+        put("sound", record.sound ?: JSONObject.NULL)
+        put("category", record.category ?: JSONObject.NULL)
+        put("userInfo", JSONObject(record.userInfo))
+        put("scheduledAtMs", record.scheduledAtMs)
+        put("deliveryAtMs", record.deliveryAtMs ?: JSONObject.NULL)
+        put("status", record.status)
+        put("trigger", record.trigger)
+        put("interactionType", record.interactionType ?: JSONObject.NULL)
+    }
+
+    private fun pushTemplateJSON(template: PushNotificationTemplate) = JSONObject().apply {
+        put("id", template.id)
+        put("name", template.name)
+        put("title", template.title)
+        put("body", template.body)
+        put("subtitle", template.subtitle ?: JSONObject.NULL)
+        put("badge", template.badge ?: JSONObject.NULL)
+        put("sound", template.sound ?: JSONObject.NULL)
+        put("category", template.category ?: JSONObject.NULL)
+        put("userInfo", JSONObject(template.userInfo))
+        put("isDefault", template.isDefault)
+    }
+
+    private fun savePushHistory(context: Context) {
+        val json = JSONArray()
+        pushHistory.take(pushMaxHistoryCount).forEach { json.put(pushRecordJSON(it)) }
+        pushPreferences(context).edit().putString("history", json.toString()).apply()
+    }
+
+    private fun savePushTemplates(context: Context) {
+        val json = JSONArray()
+        pushTemplates.forEach { json.put(pushTemplateJSON(it)) }
+        pushPreferences(context).edit().putString("templates", json.toString()).apply()
+    }
+
+    private fun notificationsPermissionGranted(context: Context): Boolean =
+        (Build.VERSION.SDK_INT < 33 || context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) == android.content.pm.PackageManager.PERMISSION_GRANTED) &&
+            (!androidNotificationSettingsLoaded || androidNotificationsEnabled)
+
+    private fun refreshNotificationSettings(context: Context) {
+        notificationExecutor.execute {
+            androidNotificationsEnabled = runCatching { NotificationManagerCompat.from(context).areNotificationsEnabled() }.getOrDefault(false)
+            androidNotificationSettingsLoaded = true
+        }
+    }
+
+    private fun requestNotificationPermission(context: Context): String {
+        if (Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            val activity = foregroundActivity.get()
+            if (activity != null) {
+                activity.runOnUiThread {
+                    if (context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+                        activity.requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 5081)
+                    }
+                }
+                return "Android notification permission requested. Grant it, then try the action again."
+            }
+            return "Android notification permission is not granted. Open the host app and request it from an Activity."
+        }
+        if (androidNotificationSettingsLoaded && !androidNotificationsEnabled) {
+            return "Notifications are disabled for this app. Choose Open notification settings to enable them."
+        }
+        return ""
+    }
+
+    private fun togglePushSimulation(context: Context): String {
+        pushEnabled = !pushEnabled
+        persistPushConfiguration(context)
+        if (pushEnabled) {
+            refreshNotificationSettings(context)
+            publishEvent("app", "Push notification simulation enabled")
+            val permissionMessage = requestNotificationPermission(context)
+            return if (permissionMessage.isEmpty()) "Push notification simulation enabled. Android notification permission is available."
+            else "Push notification simulation enabled.\n$permissionMessage"
+        }
+        pendingPushNotifications.values.forEach { it.cancel(true) }
+        pendingPushNotifications.clear()
+        pushHistory.filter { it.status == "Scheduled" }.forEach { record ->
+            notificationExecutor.execute { NotificationManagerCompat.from(context).cancel(record.id.hashCode()) }
+            updatePushNotification(context, record.id, "Dismissed")
+        }
+        publishEvent("app", "Push notification simulation disabled")
+        return "Push notification simulation disabled. Pending local notifications were cancelled."
+    }
+
+    private fun pushNotificationSnapshot(context: Context, showAllHistory: Boolean = false): String {
+        val permission = when {
+            Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED -> "Not granted"
+            !androidNotificationSettingsLoaded -> "Checking Android notification settings"
+            androidNotificationsEnabled -> "Allowed"
+            else -> "Disabled in system settings"
+        }
+        val pageCount = ((pushHistory.size + PUSH_HISTORY_PAGE_SIZE - 1) / PUSH_HISTORY_PAGE_SIZE).coerceAtLeast(1)
+        pushHistoryPage = pushHistoryPage.coerceIn(1, pageCount)
+        val firstIndex = (pushHistoryPage - 1) * PUSH_HISTORY_PAGE_SIZE
+        val pageRecords = if (showAllHistory) pushHistory.toList() else pushHistory.drop(firstIndex).take(PUSH_HISTORY_PAGE_SIZE)
+        val history = pageRecords.joinToString("\n\n") { record ->
+            val scheduled = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.getDefault()).format(Date(record.scheduledAtMs))
+            val delivered = record.deliveryAtMs?.let { "\nDelivered: ${SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(Date(it))}" }.orEmpty()
+            val metadata = buildList {
+                record.subtitle?.let { add("Subtitle: $it") }
+                record.badge?.let { add("Badge: $it") }
+                record.sound?.let { add("Sound: $it") }
+                if (record.userInfo.isNotEmpty()) add("User info: ${record.userInfo.entries.joinToString { "${it.key}=${it.value}" }}")
+            }.joinToString("\n")
+            "${record.status} · ${record.title}\n${record.body}${if (metadata.isEmpty()) "" else "\n$metadata"}\nTrigger: ${record.trigger}\nScheduled: $scheduled${delivered}\nID: ${record.id}"
+        }.ifEmpty { "No simulated notifications yet." }
+        val templates = pushTemplates.joinToString("\n") { "${it.name}: ${it.title} — ${it.body}" }.ifEmpty { "No templates configured." }
+        val pageLabel = if (showAllHistory) "all pages" else "page $pushHistoryPage/$pageCount"
+        return "Simulation: ${if (pushEnabled) "Enabled" else "Disabled"}\nNotification permission: $permission\nChannel: $NOTIFICATION_CHANNEL\n\nConfiguration\nShow in foreground: $pushShowInForeground\nPlay sound: $pushPlaySound\nShow badge: $pushShowBadge\nAuto interaction: $pushAutoInteraction (${pushInteractionDelaySeconds}s)\nSimulate real push: $pushSimulateRealPush\nDefault sound: $pushDefaultSound\nMax history: $pushMaxHistoryCount\n\nTemplates\n$templates\n\nNotification history (${pushHistory.size}) · $pageLabel\n$history${if (showAllHistory) "" else "\n\nUse History page with a page number to browse older notifications."}"
+    }
+
+    private fun addPushRecord(context: Context, record: PushNotificationRecord) {
+        synchronized(pushHistory) {
+            pushHistory.add(0, record)
+            pushHistoryPage = 1
+            while (pushHistory.size > pushMaxHistoryCount) pushHistory.removeAt(pushHistory.lastIndex)
+            savePushHistory(context)
+        }
+    }
+
+    private fun updatePushNotification(context: Context, id: String, status: String, interactionType: String? = null) {
+        synchronized(pushHistory) {
+            val index = pushHistory.indexOfFirst { it.id == id }
+            if (index < 0) return
+            val old = pushHistory[index]
+            pushHistory[index] = old.copy(
+                status = status,
+                deliveryAtMs = if (status == "Delivered" || status == "Interacted") old.deliveryAtMs ?: System.currentTimeMillis() else old.deliveryAtMs,
+                interactionType = interactionType ?: old.interactionType
+            )
+            savePushHistory(context)
+        }
+        publishEvent("app", "Notification $id status: $status")
+    }
+
+    private fun schedulePushNotification(
+        context: Context,
+        title: String,
+        body: String,
+        delaySeconds: Long = 0,
+        subtitle: String? = null,
+        badge: Int? = null,
+        sound: String? = null,
+        category: String? = null,
+        userInfo: Map<String, String> = emptyMap()
+    ): String {
+        if (!pushEnabled) return "Enable push notification simulation before creating a notification."
+        if (delaySeconds < 0) return "Delay must be zero or more seconds."
+        val permissionMessage = requestNotificationPermission(context)
+        if (permissionMessage.isNotEmpty()) return permissionMessage
+        val boundedDelay = delaySeconds.coerceAtMost(86_400L)
+        val id = UUID.randomUUID().toString()
+        val record = PushNotificationRecord(
+            id = id,
+            title = title,
+            body = body,
+            subtitle = subtitle,
+            badge = badge,
+            sound = sound,
+            category = category,
+            userInfo = userInfo,
+            scheduledAtMs = System.currentTimeMillis(),
+            deliveryAtMs = null,
+            status = "Scheduled",
+            trigger = if (boundedDelay == 0L) "Immediate" else "In ${boundedDelay}s",
+            interactionType = null
+        )
+        addPushRecord(context, record)
+        val deliver = Runnable {
+            pendingPushNotifications.remove(id)
+            if (!pushEnabled) {
+                updatePushNotification(context, id, "Dismissed")
+                return@Runnable
+            }
+            if (!notificationsPermissionGranted(context)) {
+                updatePushNotification(context, id, "Failed")
+                return@Runnable
+            }
+            val shouldShow = pushShowInForeground || !appInForeground
+            if (shouldShow) {
+                runCatching {
+                    val soundName = sound ?: if (pushPlaySound) pushDefaultSound else "silent"
+                    val channelID = notificationChannelID(context, soundName)
+                    val launchIntent = foregroundActivity.get()?.let { activity -> Intent(context, activity.javaClass) }
+                        ?: context.packageManager.getLaunchIntentForPackage(context.packageName)
+                        ?: Intent()
+                    launchIntent.addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                    launchIntent.putExtra(PUSH_NOTIFICATION_ID_EXTRA, id)
+                    launchIntent.putExtra("debugswift_notification_title", title)
+                    launchIntent.putExtra("debugswift_notification_body", body)
+                    launchIntent.putExtra("debugswift_notification_user_info", JSONObject(userInfo).toString())
+                    val pendingIntent = PendingIntent.getActivity(
+                        context,
+                        id.hashCode(),
+                        launchIntent,
+                        PendingIntent.FLAG_UPDATE_CURRENT or if (Build.VERSION.SDK_INT >= 23) PendingIntent.FLAG_IMMUTABLE else 0
+                    )
+                    val notification = NotificationCompat.Builder(context, channelID)
+                        .setSmallIcon(android.R.drawable.ic_dialog_info)
+                        .setContentTitle(title)
+                        .setContentText(body)
+                        .setSubText(subtitle)
+                        .setStyle(NotificationCompat.BigTextStyle().bigText(body))
+                        .setContentIntent(pendingIntent)
+                        .setAutoCancel(true)
+                        .setNumber(if (pushShowBadge) badge ?: 0 else 0)
+                        .setSound(resolveNotificationSound(context, soundName))
+                        .setCategory(category?.takeIf { it.isNotBlank() } ?: NotificationCompat.CATEGORY_MESSAGE)
+                        .build()
+                    NotificationManagerCompat.from(context).notify(id.hashCode(), notification)
+                }.onFailure { error ->
+                    updatePushNotification(context, id, "Failed")
+                    log("Could not post local notification: ${error.message}", Log.ERROR)
+                }
+            }
+            if (pushHistory.any { it.id == id && it.status != "Failed" }) {
+                updatePushNotification(context, id, "Delivered")
+                publishEvent("app", "Local test notification posted: $title")
+                if (pushAutoInteraction) {
+                    mainHandler.postDelayed({
+                        if (pushHistory.any { it.id == id && it.status == "Delivered" }) {
+                            updatePushNotification(context, id, "Interacted", "Tap")
+                        }
+                    }, (pushInteractionDelaySeconds.coerceAtLeast(0.0) * 1_000).toLong())
+                }
+            }
+        }
+        if (boundedDelay == 0L) {
+            notificationExecutor.execute(deliver)
+            return "Local notification queued for immediate delivery: $title."
+        }
+        pendingPushNotifications[id] = notificationExecutor.schedule(deliver, boundedDelay, TimeUnit.SECONDS)
+        return "Local notification scheduled in $boundedDelay seconds (ID: $id)."
+    }
+
+    private fun resolveNotificationSound(context: Context, soundName: String): Uri? {
+        if (soundName.equals("silent", ignoreCase = true) || soundName.isBlank()) return null
+        if (soundName == "default") return android.provider.Settings.System.DEFAULT_NOTIFICATION_URI
+        val resourceID = context.resources.getIdentifier(soundName, "raw", context.packageName)
+        return if (resourceID != 0) Uri.parse("android.resource://${context.packageName}/$resourceID")
+        else android.provider.Settings.System.DEFAULT_NOTIFICATION_URI
+    }
+
+    private fun notificationChannelID(context: Context, soundName: String): String {
+        if (Build.VERSION.SDK_INT < 26) return NOTIFICATION_CHANNEL
+        val safeSound = soundName.lowercase(Locale.ROOT).replace(Regex("[^a-z0-9_]+"), "_").take(24).ifEmpty { "default" }
+        val badgeSuffix = if (pushShowBadge) "_badge" else "_no_badge"
+        val channelID = "${NOTIFICATION_CHANNEL}_${safeSound}$badgeSuffix"
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+        if (manager.getNotificationChannel(channelID) == null) {
+            val silent = soundName.equals("silent", ignoreCase = true)
+            val channel = NotificationChannel(channelID, "DebugSwift tests${if (silent) " (silent)" else ""}${if (pushShowBadge) "" else " (no badge)"}", if (silent) NotificationManager.IMPORTANCE_LOW else NotificationManager.IMPORTANCE_DEFAULT)
+            channel.setSound(resolveNotificationSound(context, soundName), null)
+            channel.setShowBadge(pushShowBadge)
+            manager.createNotificationChannel(channel)
+        }
+        return channelID
+    }
+
+    private fun simulatePushTemplate(context: Context, value: String): String {
+        val parts = value.split("|", limit = 2).map { it.trim() }
+        val name = parts.firstOrNull().orEmpty()
+        if (name.isBlank()) return "Enter a template name, optionally followed by |delay seconds."
+        val template = pushTemplates.firstOrNull { it.name.equals(name, ignoreCase = true) }
+            ?: return "No notification template named '$name'. Available: ${pushTemplates.joinToString { it.name }}"
+        val delayValue = parts.getOrNull(1).orEmpty()
+        val delay = delayValue.toLongOrNull() ?: if (delayValue.isBlank()) 0L else return "Template delay must be a whole number of seconds."
+        if (delay < 0) return "Delay must be zero or more seconds."
+        fun render(text: String?) = text?.replace(Regex("\\{\\{([^{}]+)\\}\\}")) { match -> template.userInfo[match.groupValues[1]].orEmpty() }
+        return schedulePushNotification(
+            context,
+            render(template.title).orEmpty(),
+            render(template.body).orEmpty(),
+            delay,
+            render(template.subtitle),
+            template.badge,
+            template.sound,
+            template.category,
+            template.userInfo
+        )
+    }
+
+    private fun runPushScenario(context: Context, value: String): String {
+        val parts = value.split("|", limit = 4).map { it.trim() }
+        val scenario = parts.firstOrNull().orEmpty().lowercase(Locale.ROOT).replace(Regex("[^a-z]"), "")
+        val notifications = when (scenario) {
+            "messageflow" -> listOf(
+                Triple("New Message", "You have a message from John", 0L),
+                Triple("Message Delivered", "Your message was delivered", 3L),
+                Triple("John is typing...", "John is composing a message", 6L)
+            )
+            "newsupdates" -> listOf(
+                Triple("Breaking News", "Major technology breakthrough announced", 0L),
+                Triple("Sports Update", "Championship game ends in overtime", 5L),
+                Triple("Weather Alert", "Severe weather warning in your area", 10L)
+            )
+            "marketingcampaign" -> listOf(
+                Triple("Welcome Offer!", "Get 50% off your first purchase", 0L),
+                Triple("Cart Reminder", "You have items waiting in your cart", 300L),
+                Triple("Flash Sale! ⚡", "24-hour flash sale starts now", 600L)
+            )
+            "systemalerts" -> listOf(
+                Triple("Security Alert", "New login from unknown device", 0L),
+                Triple("Backup Complete", "Your data has been backed up successfully", 2L),
+                Triple("Update Available", "A new app update is available", 4L)
+            )
+            "customflow" -> {
+                if (parts.size < 3) return "For customFlow, enter customFlow|title|message|delay seconds."
+                val delayValue = parts.getOrNull(3).orEmpty()
+                val delay = delayValue.toLongOrNull() ?: if (delayValue.isBlank()) 0L else return "Delay must be a whole number of seconds."
+                if (delay < 0) return "Delay must be zero or more seconds."
+                return schedulePushNotification(context, parts[1], parts[2], delay)
+                    .let { "Custom flow: $it" }
+            }
+            else -> return "Choose messageFlow, newsUpdates, marketingCampaign, systemAlerts, or customFlow|title|message|delay."
+        }
+        if (!pushEnabled) return "Enable push notification simulation before running a scenario."
+        val permissionMessage = requestNotificationPermission(context)
+        if (permissionMessage.isNotEmpty()) return permissionMessage
+        val results = notifications.map { (title, body, delay) -> schedulePushNotification(context, title, body, delay) }
+        return "Scenario '${parts[0]}' started.\n" + results.joinToString("\n")
+    }
+
+    private fun setPushConfiguration(context: Context, value: String): String {
+        val parts = value.split("=", limit = 2).map { it.trim() }
+        if (parts.size != 2 || parts[0].isBlank()) {
+            return "Set one option at a time: showInForeground=true, playSound=true, showBadge=true, autoInteraction=false, interactionDelay=3, simulateRealPush=false, defaultSound=default, maxHistoryCount=100."
+        }
+        val key = parts[0].lowercase(Locale.ROOT).replace("_", "").replace("-", "")
+        val raw = parts[1]
+        val bool = raw.toBooleanStrictOrNull()
+        when (key) {
+            "showinforeground" -> pushShowInForeground = bool ?: return "showInForeground must be true or false."
+            "playsound" -> pushPlaySound = bool ?: return "playSound must be true or false."
+            "showbadge" -> pushShowBadge = bool ?: return "showBadge must be true or false."
+            "autointeraction" -> pushAutoInteraction = bool ?: return "autoInteraction must be true or false."
+            "interactiondelay" -> pushInteractionDelaySeconds = raw.toDoubleOrNull()?.takeIf { it in listOf(1.0, 2.0, 3.0, 5.0, 10.0) } ?: return "interactionDelay must be one of 1, 2, 3, 5, or 10 seconds."
+            "simulaterealpush" -> pushSimulateRealPush = bool ?: return "simulateRealPush must be true or false."
+            "defaultsound" -> {
+                if (raw.isBlank()) return "defaultSound cannot be empty. Use default, silent, or a raw resource name."
+                pushDefaultSound = raw
+            }
+            "maxhistorycount" -> pushMaxHistoryCount = raw.toIntOrNull()?.takeIf { it in listOf(50, 100, 200, 500, 1_000) } ?: return "maxHistoryCount must be 50, 100, 200, 500, or 1000."
+            else -> return "Unknown notification option '${parts[0]}'."
+        }
+        persistPushConfiguration(context)
+        savePushHistory(context)
+        return "Notification configuration updated: ${parts[0]}=$raw."
+    }
+
+    private fun addPushTemplate(context: Context, value: String): String {
+        val parts = value.split("|", limit = 8).map { it.trim() }
+        if (parts.size < 3 || parts[0].isBlank() || parts[1].isBlank() || parts[2].isBlank()) {
+            return "Enter name|title|body|subtitle|badge|sound|category|key=value,... to add a template."
+        }
+        val badgeValue = parts.getOrNull(4).orEmpty()
+        val badge = badgeValue.toIntOrNull() ?: if (badgeValue.isBlank()) null else return "Badge must be a whole number."
+        val userInfo = parsePushUserInfo(parts.getOrNull(7).orEmpty())
+            ?: return "User info must use key=value pairs separated by commas."
+        val template = PushNotificationTemplate(
+            UUID.randomUUID().toString(),
+            parts[0],
+            parts[1],
+            parts[2],
+            parts.getOrNull(3)?.takeIf { it.isNotBlank() },
+            badge,
+            parts.getOrNull(5)?.takeIf { it.isNotBlank() },
+            parts.getOrNull(6)?.takeIf { it.isNotBlank() },
+            userInfo,
+            false
+        )
+        return storePushTemplate(context, template)
+    }
+
+    private fun storePushTemplate(context: Context, template: PushNotificationTemplate): String {
+        if (pushTemplates.any { it.name.equals(template.name, ignoreCase = true) }) return "A template named '${template.name}' already exists."
+        pushTemplates.add(template)
+        savePushTemplates(context)
+        publishEvent("app", "Push notification template added: ${template.name}")
+        return "Notification template '${template.name}' added."
+    }
+
+    private fun removePushTemplate(context: Context, value: String): String {
+        val name = value.trim()
+        if (name.isBlank()) return "Enter a notification template name to remove."
+        val template = pushTemplates.firstOrNull { it.name.equals(name, ignoreCase = true) }
+            ?: return "No notification template named '$name'."
+        if (template.isDefault) return "Default notification templates cannot be removed."
+        pushTemplates.remove(template)
+        savePushTemplates(context)
+        publishEvent("app", "Push notification template removed: ${template.name}")
+        return "Notification template '${template.name}' removed."
+    }
+
+    private fun clearPushHistory(): String {
+        val context = appContext ?: return "Android runtime has not been installed."
+        pushHistory.clear()
+        savePushHistory(context)
+        publishEvent("app", "Push notification history cleared")
+        return "Push notification history cleared."
+    }
+
+    private fun removePushNotification(context: Context, value: String): String {
+        val id = value.trim()
+        if (id.isBlank()) return "Enter the notification ID shown in its history entry."
+        val record = pushHistory.firstOrNull { it.id == id } ?: return "No simulated notification with ID '$id'."
+        pendingPushNotifications.remove(id)?.cancel(true)
+        notificationExecutor.execute { NotificationManagerCompat.from(context).cancel(id.hashCode()) }
+        pushHistory.remove(record)
+        savePushHistory(context)
+        return "Removed notification '${record.title}' from history."
+    }
+
+    private fun interactWithPushNotification(context: Context, value: String): String {
+        val id = value.trim()
+        if (pushHistory.none { it.id == id }) return "Enter a notification ID from history."
+        updatePushNotification(context, id, "Interacted", "Tap")
+        return "Interaction recorded for notification $id."
+    }
+
+    private fun resendPushNotification(context: Context, value: String): String {
+        val id = value.trim()
+        val record = pushHistory.firstOrNull { it.id == id }
+            ?: return "Enter a notification ID from history."
+        return schedulePushNotification(context, record.title, record.body, subtitle = record.subtitle, badge = record.badge, sound = record.sound, category = record.category, userInfo = record.userInfo)
+    }
+
+    private fun showPushHistoryPage(context: Context, value: String): String {
+        val requestedPage = value.trim().toIntOrNull()
+            ?: return "Enter a history page number from 1 to ${((pushHistory.size + PUSH_HISTORY_PAGE_SIZE - 1) / PUSH_HISTORY_PAGE_SIZE).coerceAtLeast(1)}."
+        val lastPage = ((pushHistory.size + PUSH_HISTORY_PAGE_SIZE - 1) / PUSH_HISTORY_PAGE_SIZE).coerceAtLeast(1)
+        if (requestedPage !in 1..lastPage) return "History page must be between 1 and $lastPage."
+        pushHistoryPage = requestedPage
+        return pushNotificationSnapshot(context)
+    }
+
+    private fun openNotificationSettings(context: Context): String = runCatching {
+        val intent = if (Build.VERSION.SDK_INT >= 26) {
+            Intent(android.provider.Settings.ACTION_APP_NOTIFICATION_SETTINGS).putExtra(android.provider.Settings.EXTRA_APP_PACKAGE, context.packageName)
+        } else {
+            Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS, Uri.parse("package:${context.packageName}"))
+        }
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(intent)
+        "Opened Android notification settings for ${context.packageName}."
+    }.getOrElse { "Could not open notification settings: ${it.message}" }
 
     private fun deviceInfo(context: Context): String {
         val packageInfo = if (Build.VERSION.SDK_INT >= 33) {
@@ -1884,6 +2639,11 @@ object AndroidDebugTools {
     @Volatile private var lastIntentDescription = ""
 
     fun reportIntent(intent: Intent?) {
+        val notificationID = intent?.getStringExtra(PUSH_NOTIFICATION_ID_EXTRA)
+        if (notificationID != null && pushHistory.any { it.id == notificationID }) {
+            appContext?.let { updatePushNotification(it, notificationID, "Interacted", "Tap") }
+            publishEvent("app", "Simulated notification opened the host app")
+        }
         lastIntentDescription = intent?.data?.toString() ?: intent?.action ?: "No URI or action on the last intent."
         publishEvent("app", "Intent received: $lastIntentDescription")
     }
