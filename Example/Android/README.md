@@ -37,6 +37,8 @@ Add `DebugSwiftOkHttpInterceptor()` to each OkHttp client whose traffic should b
 
 The runtime also exposes host hooks for custom actions and diagnostic values (`registerAction`, `registerInfo`), FCM tokens (`reportPushToken`), location (`reportLocation`), Room databases, and Realm projections (`DebugSwiftRealmRegistry.register`). Forward Activity touch events to `AndroidDebugTools.recordTouch(event)` and wrap a Compose subtree in `DebugSwiftComposeProbe` to collect those interface diagnostics.
 
+To share exported files from the Android system Sharesheet, merge the sample's `FileProvider` entry into the host app manifest and add `debugswift_file_paths.xml` under `res/xml`. Use authority `${applicationId}.debugswift.fileprovider`, disable provider export, enable URI grants, and expose only app-private `cache-path` and `files-path` locations. The sample manifest and resource file show the exact configuration. Export actions then open the native Android Sharesheet with a read-only content URI.
+
 ### Push notification simulation
 
 The Push Notifications tool supports local notifications without an FCM server. Add `POST_NOTIFICATIONS` to the host manifest and enable the simulator before posting. Android 13 and newer request permission at runtime:

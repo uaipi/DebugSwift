@@ -7,6 +7,7 @@ import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.content.Context
+import android.content.ClipData
 import android.content.Intent
 import android.content.IntentFilter
 import android.graphics.Bitmap
@@ -28,10 +29,12 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
+import android.webkit.MimeTypeMap
 import android.security.keystore.KeyInfo
 import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import androidx.core.content.FileProvider
 import java.io.File
 import java.io.PrintWriter
 import java.io.StringWriter
@@ -1299,7 +1302,38 @@ object AndroidDebugTools {
             "doc_recorder" -> File(lastRecordingPath).takeIf { lastRecordingPath.isNotEmpty() && it.exists() }
             else -> null
         }
-        return file?.let { "Exported ${it.name}\n${it.absolutePath}" } ?: "Nothing to export for $featureID."
+        return file?.let { shareExport(it, context) } ?: "Nothing to export for $featureID."
+    }
+
+    private fun shareExport(file: File, context: Context): String {
+        if (!file.isFile) return "Export file is unavailable."
+        val activity = foregroundActivity.get() ?: return "Exported ${file.name}, but no foreground Activity is available to share it."
+        return runCatching {
+            val uri = FileProvider.getUriForFile(
+                context,
+                "${context.packageName}.debugswift.fileprovider",
+                file
+            )
+            val mimeType = MimeTypeMap.getSingleton()
+                .getMimeTypeFromExtension(file.extension.lowercase(Locale.ROOT))
+                ?: "application/octet-stream"
+            val sendIntent = Intent(Intent.ACTION_SEND).apply {
+                type = mimeType
+                putExtra(Intent.EXTRA_STREAM, uri)
+                clipData = ClipData.newUri(context.contentResolver, file.name, uri)
+                addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+            }
+            val chooser = Intent.createChooser(sendIntent, "Share ${file.name}")
+            if (Looper.myLooper() == Looper.getMainLooper()) {
+                activity.startActivity(chooser)
+            } else {
+                mainHandler.post { activity.startActivity(chooser) }
+            }
+            "Sharing ${file.name}."
+        }.getOrElse { error ->
+            Log.e(TAG, "Unable to share exported file ${file.name}", error)
+            "Exported ${file.name}, but sharing failed. Add the DebugSwift FileProvider to the host app manifest."
+        }
     }
 
     private fun registerLifecycleCallbacks(context: Context) {
