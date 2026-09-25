@@ -726,11 +726,18 @@ object AndroidDebugTools {
     }
 
     fun interfaceToolEnabled(featureID: String): Boolean {
+        if (featureID == "dark_mode") {
+            return AppCompatDelegate.getDefaultNightMode() == AppCompatDelegate.MODE_NIGHT_YES
+        }
         val nativeID = if (featureID == "colorize") "view_borders" else featureID
         return synchronized(enabledTools) { nativeID in enabledTools }
     }
 
     fun setInterfaceToolEnabled(featureID: String, enabled: Boolean): String {
+        if (featureID == "dark_mode") {
+            val context = appContext ?: return "Android runtime has not been installed."
+            return setDarkModeOverride(context, enabled)
+        }
         val nativeID = if (featureID == "colorize") "view_borders" else featureID
         if (nativeID !in setOf("grid", "touches", "view_borders")) {
             return "Interface toggle '$featureID' is not available on Android."
@@ -2685,6 +2692,14 @@ object AndroidDebugTools {
         AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM)
         publishEvent("interface", "Appearance follows system settings")
         return "App appearance now follows the Android system setting."
+    }
+
+    private fun setDarkModeOverride(context: Context, enabled: Boolean): String {
+        if (!enabled) return resetDarkMode(context)
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("appearance_override", "dark").apply()
+        AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_YES)
+        publishEvent("interface", "Appearance forced to dark mode")
+        return "App appearance forced to Dark mode. AppCompat host activities apply the override when their theme supports DayNight."
     }
 
     private fun restoreAppearanceOverride(context: Context) {

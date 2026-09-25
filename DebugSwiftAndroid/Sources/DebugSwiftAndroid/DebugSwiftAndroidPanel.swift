@@ -322,6 +322,8 @@ private struct DebugSwiftFeatureDestination: View {
             DebugSwiftNetworkInspectorView(featureID: feature.id)
         } else if feature.id == "network_history" {
             DebugSwiftNetworkSessionHistoryView()
+        } else if ["touches", "view_borders", "dark_mode"].contains(feature.id) {
+            DebugSwiftInterfaceSettingView(featureID: feature.id)
         } else {
             DebugSwiftFeatureDetail(feature: feature)
         }
@@ -413,6 +415,7 @@ private struct DebugSwiftInterfaceSettingView: View {
         switch featureID {
         case "touches": "Showing touches"
         case "colorize": "Colorized view borders"
+        case "view_borders": "Show view borders"
         case "animations": "Slow animations"
         case "dark_mode": "Dark Mode"
         case "measurement": "UI measurements"
