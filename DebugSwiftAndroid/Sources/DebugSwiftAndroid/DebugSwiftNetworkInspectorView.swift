@@ -103,6 +103,244 @@ private struct DebugSwiftNetworkDecryptionSettings: Codable {
     var patterns: [String] = []
 }
 
+struct DebugSwiftNetworkSessionSnapshot: Codable, Identifiable {
+    let id: String
+    let startedAtMilliseconds: Int64
+    let endedAtMilliseconds: Int64?
+    let requestCount: Int
+    let isActive: Bool
+
+    var title: String {
+        let date = Date(timeIntervalSince1970: Double(startedAtMilliseconds) / 1_000)
+        return DateFormatter.localizedString(from: date, dateStyle: .medium, timeStyle: .short)
+    }
+
+    var subtitle: String {
+        let count = requestCount == 0 ? "No requests" : "\(requestCount) request\(requestCount == 1 ? "" : "s")"
+        guard !isActive, let endedAtMilliseconds else { return isActive ? "\(count) · Active" : count }
+        let seconds = max(0, Int((endedAtMilliseconds - startedAtMilliseconds) / 1_000))
+        return "\(count) · \(String(format: "%02d:%02d:%02d", seconds / 3_600, (seconds % 3_600) / 60, seconds % 60))"
+    }
+}
+
+private struct DebugSwiftNetworkSessionHistorySnapshot: Codable {
+    let sessions: [DebugSwiftNetworkSessionSnapshot]
+    let retentionDays: Int
+}
+
+private struct DebugSwiftNetworkSessionRequestsSnapshot: Codable {
+    let requests: [DebugSwiftNetworkRequestSnapshot]
+}
+
+struct DebugSwiftNetworkSessionHistoryView: View {
+    @State private var sessions: [DebugSwiftNetworkSessionSnapshot] = []
+    @State private var retentionDays = 7
+    @State private var isLoading = false
+    @State private var statusMessage = ""
+    @State private var confirmsClearAll = false
+    @State private var confirmsDelete = false
+    @State private var sessionToDelete: DebugSwiftNetworkSessionSnapshot?
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button("Refresh") { refresh() }
+                Spacer()
+                Button("Clear All", role: .destructive) { confirmsClearAll = true }
+                    .disabled(sessions.isEmpty || isLoading)
+            }
+            .padding(.horizontal)
+            .padding(.vertical, 10)
+
+            List {
+                if sessions.isEmpty {
+                    Text(isLoading ? "Loading saved sessions…" : "No session history available.")
+                        .foregroundColor(.secondary)
+                        .frame(maxWidth: .infinity, minHeight: 120)
+                } else {
+                    ForEach(sessions) { session in
+                        NavigationLink {
+                            DebugSwiftNetworkSessionRequestsView(session: session)
+                        } label: {
+                            VStack(alignment: .leading, spacing: 5) {
+                                Text(session.title)
+                                    .font(.headline)
+                                Text(session.subtitle)
+                                    .font(.caption)
+                                    .foregroundColor(.secondary)
+                            }
+                            .padding(.vertical, 4)
+                        }
+                        .contextMenu {
+                            Button("Delete Session", role: .destructive) {
+                                sessionToDelete = session
+                                confirmsDelete = true
+                            }
+                        }
+                    }
+                }
+
+                Section {
+                    Text("Session history only preserves the last \(retentionDays) day\(retentionDays == 1 ? "" : "s") of data.")
+                        .font(.caption)
+                        .foregroundColor(.secondary)
+                }
+            }
+
+            if !statusMessage.isEmpty {
+                Text(statusMessage)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+            }
+        }
+        .navigationTitle("Session History")
+        .onAppear { refresh() }
+        .alert("Clear All Sessions?", isPresented: $confirmsClearAll) {
+            Button("Cancel", role: .cancel) {}
+            Button("Clear All", role: .destructive) { perform("clear_all") }
+        } message: {
+            Text("This removes all saved network sessions. This action cannot be undone.")
+        }
+        .alert("Delete Session?", isPresented: $confirmsDelete) {
+            Button("Cancel", role: .cancel) { sessionToDelete = nil }
+            Button("Delete", role: .destructive) {
+                if let sessionToDelete { perform("delete_session", sessionID: sessionToDelete.id) }
+                sessionToDelete = nil
+            }
+        } message: {
+            Text("This removes the selected saved session and its requests.")
+        }
+    }
+
+    private func refresh(statusOverride: String? = nil) {
+        isLoading = true
+        Task {
+            let json = await DebugSwiftAndroidRuntime.networkSessionHistorySnapshotJSON()
+            if let data = json.data(using: .utf8),
+               let snapshot = try? JSONDecoder().decode(DebugSwiftNetworkSessionHistorySnapshot.self, from: data) {
+                sessions = snapshot.sessions
+                retentionDays = max(snapshot.retentionDays, 1)
+                statusMessage = statusOverride ?? "\(sessions.count) saved session\(sessions.count == 1 ? "" : "s")"
+            } else {
+                sessions = []
+                statusMessage = "Saved sessions could not be loaded."
+            }
+            isLoading = false
+        }
+    }
+
+    private func perform(_ actionID: String, sessionID: String = "") {
+        Task {
+            let result = await DebugSwiftAndroidRuntime.performNetworkSessionHistoryAction(
+                actionID: actionID,
+                sessionID: sessionID
+            )
+            refresh(statusOverride: result)
+        }
+    }
+}
+
+private struct DebugSwiftNetworkSessionRequestsView: View {
+    let session: DebugSwiftNetworkSessionSnapshot
+
+    @State private var requests: [DebugSwiftNetworkRequestSnapshot] = []
+    @State private var searchText = ""
+    @State private var statusMessage = ""
+    @State private var isLoading = false
+    @State private var confirmsImport = false
+
+    private var filteredRequests: [DebugSwiftNetworkRequestSnapshot] {
+        let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        guard !query.isEmpty else { return requests }
+        return requests.filter {
+            $0.url.lowercased().contains(query) ||
+                $0.method.lowercased().contains(query) ||
+                $0.statusCode.lowercased().contains(query)
+        }
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button("Refresh") { refresh() }
+                Spacer()
+                Button("Import to Response Modifier") { confirmsImport = true }
+                    .disabled(requests.isEmpty || isLoading)
+            }
+            .font(.caption)
+            .padding(.horizontal)
+            .padding(.vertical, 10)
+
+            TextField("Search requests", text: $searchText)
+                .textFieldStyle(.roundedBorder)
+                .padding(.horizontal)
+                .padding(.bottom, 8)
+
+            if filteredRequests.isEmpty {
+                Spacer()
+                Text(isLoading ? "Loading requests…" : "No requests in this session.")
+                    .foregroundColor(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding()
+                Spacer()
+            } else {
+                List {
+                    ForEach(filteredRequests) { request in
+                        NavigationLink {
+                            DebugSwiftNetworkRequestDetail(request: request, featureID: "network_history")
+                        } label: {
+                            DebugSwiftNetworkRequestRow(request: request)
+                        }
+                    }
+                }
+            }
+
+            if !statusMessage.isEmpty {
+                Text(statusMessage)
+                    .font(.caption)
+                    .foregroundColor(.secondary)
+                    .padding(.horizontal)
+                    .padding(.bottom, 8)
+            }
+        }
+        .navigationTitle(session.title)
+        .onAppear { refresh() }
+        .alert("Import Session to Response Modifier?", isPresented: $confirmsImport) {
+            Button("Cancel", role: .cancel) {}
+            Button("Import", role: .destructive) { importSession() }
+        } message: {
+            Text("This replaces all existing response rewrite rules with \(requests.count) rule(s) from this session. Long sessions can create many rules and may reduce network matching performance.")
+        }
+    }
+
+    private func refresh() {
+        isLoading = true
+        Task {
+            let json = await DebugSwiftAndroidRuntime.networkSessionRequestsSnapshotJSON(sessionID: session.id)
+            if let data = json.data(using: .utf8),
+               let snapshot = try? JSONDecoder().decode(DebugSwiftNetworkSessionRequestsSnapshot.self, from: data) {
+                requests = snapshot.requests
+                statusMessage = "\(requests.count) request\(requests.count == 1 ? "" : "s")"
+            } else {
+                requests = []
+                statusMessage = "Session requests could not be loaded."
+            }
+            isLoading = false
+        }
+    }
+
+    private func importSession() {
+        Task {
+            statusMessage = await DebugSwiftAndroidRuntime.performNetworkSessionHistoryAction(
+                actionID: "import_session",
+                sessionID: session.id
+            )
+        }
+    }
+}
+
 struct DebugSwiftNetworkInspectorView: View {
     let featureID: String
 
@@ -647,6 +885,23 @@ private struct DebugSwiftNetworkRequestDetail: View {
     }
 
     private func perform(_ actionID: String) {
+        if featureID == "network_history" {
+            switch actionID {
+            case "copy_log":
+                copy(requestLogText)
+            case "share_log":
+                statusMessage = DebugSwiftAndroidRuntime.shareNetworkSessionRequestLog(requestLogText)
+            case "copy_curl":
+                copy(cURLCommand)
+            case "replay":
+                Task {
+                    statusMessage = await DebugSwiftAndroidRuntime.replayNetworkSessionRequest(requestID: request.id)
+                }
+            default:
+                statusMessage = "Unknown session request action: \(actionID)."
+            }
+            return
+        }
         statusMessage = DebugSwiftAndroidRuntime.performNetworkInspectorAction(
             featureID: featureID,
             actionID: actionID,
@@ -665,6 +920,50 @@ private struct DebugSwiftNetworkRequestDetail: View {
 
     private func formattedHeaders(_ headers: [String: String]) -> String {
         headers.keys.sorted().map { "\($0): \(headers[$0] ?? "")" }.joined(separator: "\n").ifEmpty("No headers")
+    }
+
+    private var requestLogText: String {
+        """
+        [\(request.method)] \(request.timestamp) (\(request.statusCode))
+
+        ------- URL -------
+        \(request.url)
+
+        ------- REQUEST HEADER -------
+        \(formattedHeaders(request.requestHeaders))
+
+        ------- REQUEST -------
+        \(request.displayRequestBody)
+
+        ------- RESPONSE HEADER -------
+        \(formattedHeaders(request.responseHeaders))
+
+        ------- RESPONSE -------
+        \(request.displayResponseBody)
+
+        ------- TOTAL TIME -------
+        \(DebugSwiftNetworkInspectorView.formatDuration(request.durationMilliseconds))
+
+        ------- MIME TYPE -------
+        \(request.mimeType.isEmpty ? "No data" : request.mimeType)
+        """
+    }
+
+    private var cURLCommand: String {
+        var command = "curl -X \(shellQuote(request.method)) \(shellQuote(request.url))"
+        for key in request.requestHeaders.keys.sorted() {
+            let sensitive = ["authorization", "cookie", "set-cookie"].contains(key.lowercased())
+            let value = sensitive ? "<redacted>" : request.requestHeaders[key] ?? ""
+            command += " -H \(shellQuote("\(key): \(value)"))"
+        }
+        if !request.requestBody.isEmpty {
+            command += " --data-raw \(shellQuote(request.requestBody))"
+        }
+        return command
+    }
+
+    private func shellQuote(_ value: String) -> String {
+        "'\(value.replacingOccurrences(of: "'", with: "'\\''"))'"
     }
 }
 
@@ -690,6 +989,76 @@ private extension String {
 }
 
 extension DebugSwiftAndroidRuntime {
+    @MainActor
+    static func networkSessionHistorySnapshotJSON() async -> String {
+        #if os(Android)
+        return DebugSwiftNativeBridge.networkSessionHistorySnapshotJSON()
+        #elseif os(iOS)
+        if #available(iOS 17.0, *) {
+            return await DebugSwift.Network.shared.sharedSessionHistorySnapshotJSON()
+        }
+        return "{\"sessions\":[],\"retentionDays\":7}"
+        #else
+        return "{\"sessions\":[],\"retentionDays\":7}"
+        #endif
+    }
+
+    @MainActor
+    static func networkSessionRequestsSnapshotJSON(sessionID: String) async -> String {
+        #if os(Android)
+        return DebugSwiftNativeBridge.networkSessionRequestsSnapshotJSON(sessionID)
+        #elseif os(iOS)
+        if #available(iOS 17.0, *) {
+            return await DebugSwift.Network.shared.sharedSessionRequestsSnapshotJSON(sessionID: sessionID)
+        }
+        return "{\"requests\":[]}"
+        #else
+        return "{\"requests\":[]}"
+        #endif
+    }
+
+    @MainActor
+    static func performNetworkSessionHistoryAction(actionID: String, sessionID: String) async -> String {
+        #if os(Android)
+        return DebugSwiftNativeBridge.performNetworkSessionHistoryAction(actionID, sessionID)
+        #elseif os(iOS)
+        if #available(iOS 17.0, *) {
+            return await DebugSwift.Network.shared.performSharedSessionHistoryAction(actionID: actionID, sessionID: sessionID)
+        }
+        return "Session history requires iOS 17 or newer."
+        #else
+        return "Session history is unavailable."
+        #endif
+    }
+
+    @MainActor
+    static func shareNetworkSessionRequestLog(_ text: String) -> String {
+        #if os(Android)
+        return DebugSwiftNativeBridge.shareNetworkSessionRequestLog(text)
+        #elseif os(iOS)
+        if #available(iOS 17.0, *) {
+            return DebugSwift.Network.shared.shareSharedSessionRequestLog(text)
+        }
+        return "Session history requires iOS 17 or newer."
+        #else
+        return "Session history sharing is unavailable."
+        #endif
+    }
+
+    @MainActor
+    static func replayNetworkSessionRequest(requestID: String) async -> String {
+        #if os(Android)
+        return DebugSwiftNativeBridge.replayNetworkSessionRequest(requestID)
+        #elseif os(iOS)
+        if #available(iOS 17.0, *) {
+            return await DebugSwift.Network.shared.replaySharedSessionRequest(id: requestID)
+        }
+        return "Session history requires iOS 17 or newer."
+        #else
+        return "Session history replay is unavailable."
+        #endif
+    }
+
     @MainActor
     static func networkDecryptionSettings() -> String {
         #if os(Android)

@@ -32,6 +32,23 @@ object DebugSwiftNativeBridge {
         DebugSwiftNetworkConfig.performDecryptionAction(actionID, value)
 
     @JvmStatic
+    fun networkSessionHistorySnapshotJSON(): String = AndroidDebugTools.networkSessionHistorySnapshotJSON()
+
+    @JvmStatic
+    fun networkSessionRequestsSnapshotJSON(sessionID: String): String =
+        AndroidDebugTools.networkSessionRequestsSnapshotJSON(sessionID)
+
+    @JvmStatic
+    fun performNetworkSessionHistoryAction(actionID: String, sessionID: String): String =
+        AndroidDebugTools.performNetworkSessionHistoryAction(actionID, sessionID)
+
+    @JvmStatic
+    fun shareNetworkSessionRequestLog(text: String): String = AndroidDebugTools.shareNetworkSessionRequestLog(text)
+
+    @JvmStatic
+    fun replayNetworkSessionRequest(requestID: String): String = AndroidDebugTools.replayNetworkSessionRequest(requestID)
+
+    @JvmStatic
     fun networkInjectionSettingsJSON(): String = AndroidDebugTools.networkInjectionSettingsJSON()
 
     @JvmStatic

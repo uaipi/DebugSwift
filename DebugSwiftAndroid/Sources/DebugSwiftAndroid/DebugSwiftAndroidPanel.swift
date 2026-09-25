@@ -278,8 +278,7 @@ private struct DebugSwiftFeatureDestination: View {
         } else if feature.id == "websocket" {
             DebugSwiftWebSocketInspectorView()
         } else if feature.id == "network_history" {
-            DebugSwiftIOSNativeNetworkHost(featureID: feature.id)
-                .ignoresSafeArea(edges: .bottom)
+            DebugSwiftNetworkSessionHistoryView()
         } else if ["performance_overview", "performance_widget", "battery", "disk", "memory_warning", "frame_drops", "hangs", "backtraces", "leaks", "thread_checker", "super_calls"].contains(feature.id) {
             DebugSwiftIOSNativePerformanceHost(featureID: feature.id)
                 .ignoresSafeArea(edges: .bottom)
@@ -321,6 +320,8 @@ private struct DebugSwiftFeatureDestination: View {
             DebugSwiftConsoleView()
         } else if ["http", "graphql", "network_encryption", "har_export", "webview_network"].contains(feature.id) {
             DebugSwiftNetworkInspectorView(featureID: feature.id)
+        } else if feature.id == "network_history" {
+            DebugSwiftNetworkSessionHistoryView()
         } else {
             DebugSwiftFeatureDetail(feature: feature)
         }

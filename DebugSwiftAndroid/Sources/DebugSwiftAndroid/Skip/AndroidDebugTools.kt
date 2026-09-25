@@ -83,6 +83,8 @@ object AndroidDebugTools {
     private const val TAG = "DebugSwift"
     private const val PREFS = "debugswift.android"
     private const val MAX_RECORDS = 500
+    private const val MAX_NETWORK_HISTORY_RECORDS = 10_000
+    private const val NETWORK_HISTORY_RETENTION_MS = 7L * 24 * 60 * 60 * 1_000
     private const val MAX_WEBSOCKET_CONNECTIONS = 200
     private const val MAX_WEBSOCKET_FRAMES = 1000
     private const val MAIN_THREAD_STALL_MS = 700L
@@ -105,6 +107,8 @@ object AndroidDebugTools {
         Thread(task, "DebugSwiftHistory").apply { isDaemon = true }
     }
     private val networkRecords = CopyOnWriteArrayList<NetworkRecord>()
+    private val networkHistoryRecords = CopyOnWriteArrayList<NetworkRecord>()
+    @Volatile private var currentNetworkSessionID = UUID.randomUUID().toString()
     private val webSocketRecords = CopyOnWriteArrayList<String>()
     private val webSocketConnections = CopyOnWriteArrayList<WebSocketConnectionRecord>()
     private val webSocketByInstance = ConcurrentHashMap<WebSocket, String>()
@@ -262,7 +266,8 @@ object AndroidDebugTools {
         val error: String,
         val graphqlOperation: String,
         val source: String,
-        val id: String = UUID.randomUUID().toString()
+        val id: String = UUID.randomUUID().toString(),
+        val sessionID: String = currentNetworkSessionID
     )
 
     private val networkReplayClient by lazy { OkHttpClient() }
@@ -753,17 +758,20 @@ object AndroidDebugTools {
         source: String = "http"
     ) {
         val graphOperation = graphqlOperation(requestBody)
-        networkRecords.add(
-            NetworkRecord(
+        val record = NetworkRecord(
                 System.currentTimeMillis(), method, url, status, durationMs,
                 requestBytes, responseBytes, requestHeaders, responseHeaders,
                 requestBody.take(32_000), responseBody.take(64_000),
                 DebugSwiftNetworkConfig.decryptResponse(url, responseBody).orEmpty(),
                 error, graphOperation, source
             )
-        )
+        networkRecords.add(record)
         trim(networkRecords)
-        persistNetworkHistory()
+        if (isPersistableNetworkRecord(record)) {
+            networkHistoryRecords.add(record)
+            trimNetworkHistory()
+            persistNetworkHistory()
+        }
         appendAgentEntry(
             kind = "network",
             location = "OkHttp/$source",
@@ -1685,6 +1693,7 @@ object AndroidDebugTools {
             "graphql" -> networkRecords.filter { it.source == "http" && it.graphqlOperation.isNotBlank() }
             "har_export" -> networkRecords.filter { it.source == "http" }
             "webview_network" -> networkRecords.filter { it.source == "webview" }
+            "network_history" -> networkHistoryRecords.toList()
             else -> networkRecords.toList()
         }
         records.forEach { record ->
@@ -1751,10 +1760,10 @@ object AndroidDebugTools {
         if (!file.isFile) return
         runCatching {
             val rows = org.json.JSONObject(file.readText()).optJSONArray("requests") ?: return
+            val cutoff = System.currentTimeMillis() - NETWORK_HISTORY_RETENTION_MS
             for (index in 0 until rows.length()) {
                 val row = rows.getJSONObject(index)
-                networkRecords.add(
-                    NetworkRecord(
+                val record = NetworkRecord(
                         timestamp = row.optLong("timestamp"),
                         method = row.optString("method"),
                         url = row.optString("url"),
@@ -1770,11 +1779,14 @@ object AndroidDebugTools {
                         error = row.optString("error"),
                         graphqlOperation = row.optString("graphqlOperation"),
                         source = row.optString("source", "http"),
-                        id = row.optString("id").ifBlank { UUID.randomUUID().toString() }
+                        id = row.optString("id").ifBlank { UUID.randomUUID().toString() },
+                        sessionID = row.optString("sessionID").ifBlank { "legacy-session" }
                     )
-                )
+                if (record.timestamp >= cutoff && isPersistableNetworkRecord(record)) {
+                    networkHistoryRecords.add(record)
+                }
             }
-            trim(networkRecords)
+            trimNetworkHistory()
         }.onFailure { error ->
             log("Could not read saved network history: ${error.message}", Log.WARN)
         }
@@ -1782,7 +1794,9 @@ object AndroidDebugTools {
 
     private fun persistNetworkHistory() {
         val context = appContext ?: return
-        val snapshot = networkRecords.takeLast(100).toList()
+        val cutoff = System.currentTimeMillis() - NETWORK_HISTORY_RETENTION_MS
+        val snapshot = networkHistoryRecords.filter { it.timestamp >= cutoff }
+            .takeLast(MAX_NETWORK_HISTORY_RECORDS)
         persistenceExecutor.execute {
             runCatching {
                 val rows = org.json.JSONArray()
@@ -1803,7 +1817,8 @@ object AndroidDebugTools {
                         .put("error", record.error)
                         .put("graphqlOperation", record.graphqlOperation)
                         .put("source", record.source)
-                        .put("id", record.id))
+                        .put("id", record.id)
+                        .put("sessionID", record.sessionID))
                 }
                 val target = File(context.filesDir, "debugswift-network-history.json")
                 val temporary = File(context.filesDir, "debugswift-network-history.tmp")
@@ -1814,6 +1829,25 @@ object AndroidDebugTools {
                 }
             }
         }
+    }
+
+    private fun isPersistableNetworkRecord(record: NetworkRecord): Boolean {
+        if (record.source != "http") return false
+        val contentType = headerValue(record.responseHeaders, "Content-Type")?.lowercase(Locale.ROOT).orEmpty()
+        val contentDisposition = headerValue(record.responseHeaders, "Content-Disposition")?.lowercase(Locale.ROOT).orEmpty()
+        val fileMarkers = listOf(
+            "image/", "video/", "audio/", "application/pdf", "application/zip",
+            "application/x-zip-compressed", "application/octet-stream", "multipart/form-data",
+            "application/vnd.ms-excel", "application/vnd.openxmlformats-officedocument",
+            "application/msword", "application/vnd.ms-powerpoint"
+        )
+        return fileMarkers.none { marker -> contentType.contains(marker) } && !contentDisposition.contains("attachment")
+    }
+
+    private fun trimNetworkHistory() {
+        val cutoff = System.currentTimeMillis() - NETWORK_HISTORY_RETENTION_MS
+        networkHistoryRecords.removeAll { it.timestamp < cutoff || !isPersistableNetworkRecord(it) }
+        while (networkHistoryRecords.size > MAX_NETWORK_HISTORY_RECORDS) networkHistoryRecords.removeAt(0)
     }
 
     private fun encodeHeaders(headers: Map<String, List<String>>): org.json.JSONObject =
@@ -1870,11 +1904,12 @@ object AndroidDebugTools {
             return "Response decryption: ${if (DebugSwiftNetworkConfig.isDecryptionEnabled()) "enabled" else "disabled"}\nRegistered URL patterns: ${DebugSwiftNetworkConfig.decryptors.size}\nKeys are kept in memory for this process."
         }
         val historyDescription = if (featureID == "network_history") {
-            "WebSocket connections: ${webSocketConnections.size} · frames: ${webSocketConnections.sumOf { it.frames.size }}\nUp to 100 recent HTTP requests are restored from app-private storage; this process keeps at most $MAX_RECORDS.\n"
+            "Saved HTTP sessions: ${networkHistoryRecords.groupBy { it.sessionID }.size} · requests: ${networkHistoryRecords.size}\nHistory is retained for the last 7 days.\n"
         } else ""
         val recordsForFeature = when (featureID) {
             "graphql" -> networkRecords.filter { it.source == "http" && it.graphqlOperation.isNotBlank() }
             "http" -> networkRecords.filter { it.source == "http" }
+            "network_history" -> networkHistoryRecords.toList()
             else -> networkRecords.toList()
         }
         val matchingRecords = recordsForFeature.filter { record ->
@@ -1906,10 +1941,11 @@ object AndroidDebugTools {
             "webview_network" -> networkRecords.filter { it.source == "webview" }
             "graphql" -> networkRecords.filter { it.source == "http" && it.graphqlOperation.isNotBlank() }
             "har_export" -> networkRecords.filter { it.source == "http" }
+            "network_history" -> networkHistoryRecords.toList()
             else -> networkRecords.filter { it.source == "http" }
         }
         val rows = JSONArray()
-        records.takeLast(MAX_RECORDS).forEach { record ->
+        records.takeLast(if (featureID == "network_history") MAX_NETWORK_HISTORY_RECORDS else MAX_RECORDS).forEach { record ->
             rows.put(JSONObject()
                 .put("id", record.id)
                 .put("url", record.url)
@@ -1935,6 +1971,139 @@ object AndroidDebugTools {
                 .put("isSuccess", record.error.isBlank()))
         }
         return JSONObject().put("requests", rows).toString()
+    }
+
+    fun networkSessionHistorySnapshotJSON(): String {
+        val cutoff = System.currentTimeMillis() - NETWORK_HISTORY_RETENTION_MS
+        val sessions = JSONArray()
+        networkHistoryRecords.asSequence()
+            .filter { it.timestamp >= cutoff }
+            .groupBy { it.sessionID }
+            .entries
+            .sortedByDescending { (_, records) -> records.minOfOrNull { it.timestamp } ?: 0L }
+            .forEach { (sessionID, records) ->
+                val startedAt = records.minOfOrNull { it.timestamp } ?: 0L
+                val endedAt = records.maxOfOrNull { it.timestamp } ?: startedAt
+                val active = sessionID == currentNetworkSessionID
+                sessions.put(JSONObject()
+                    .put("id", sessionID)
+                    .put("startedAtMilliseconds", startedAt)
+                    .put("endedAtMilliseconds", if (active) JSONObject.NULL else endedAt)
+                    .put("requestCount", records.size)
+                    .put("isActive", active))
+            }
+        return JSONObject()
+            .put("sessions", sessions)
+            .put("retentionDays", NETWORK_HISTORY_RETENTION_MS / (24L * 60 * 60 * 1_000))
+            .toString()
+    }
+
+    fun networkSessionRequestsSnapshotJSON(sessionID: String): String {
+        val requests = JSONArray()
+        networkHistoryRecords
+            .filter { it.sessionID == sessionID }
+            .sortedBy { it.timestamp }
+            .forEach { requests.put(networkSessionRequestJSONObject(it)) }
+        return JSONObject().put("requests", requests).toString()
+    }
+
+    fun performNetworkSessionHistoryAction(actionID: String, sessionID: String): String = when (actionID) {
+        "clear_all" -> {
+            networkHistoryRecords.clear()
+            currentNetworkSessionID = UUID.randomUUID().toString()
+            persistNetworkHistory()
+            publishEvent("network", "Saved network sessions cleared")
+            "All saved network sessions were cleared."
+        }
+        "delete_session" -> {
+            if (networkHistoryRecords.none { it.sessionID == sessionID }) {
+                "This session is no longer available."
+            } else {
+                networkHistoryRecords.removeAll { it.sessionID == sessionID }
+                if (sessionID == currentNetworkSessionID) currentNetworkSessionID = UUID.randomUUID().toString()
+                persistNetworkHistory()
+                publishEvent("network", "Deleted saved session $sessionID")
+                "Network session deleted."
+            }
+        }
+        "import_session" -> importNetworkSessionAsRewriteRules(sessionID)
+        else -> "Unknown session history action: $actionID."
+    }
+
+    fun shareNetworkSessionRequestLog(text: String): String {
+        val context = appContext ?: return "Android runtime has not been installed."
+        val file = File(context.cacheDir, "debugswift-request-${System.currentTimeMillis()}.txt")
+        file.writeText(text)
+        return shareExport(file, context)
+    }
+
+    fun replayNetworkSessionRequest(requestID: String): String {
+        val record = networkHistoryRecords.firstOrNull { it.id == requestID }
+            ?: return "This request is no longer available."
+        return replayNetworkRecord(record)
+    }
+
+    private fun importNetworkSessionAsRewriteRules(sessionID: String): String {
+        val records = networkHistoryRecords.filter { it.sessionID == sessionID }.sortedBy { it.timestamp }
+        if (records.isEmpty()) return "This session has no requests to import."
+
+        val rules = JSONArray()
+        val uniqueRules = mutableSetOf<String>()
+        records.forEach { record ->
+            val pattern = record.url.trim()
+            if (pattern.isEmpty()) return@forEach
+            val responseBody = record.decryptedResponseBody.ifBlank { record.responseBody }
+            val method = record.method.trim().uppercase(Locale.ROOT)
+                .takeIf { it in setOf("GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS") }
+                .orEmpty()
+            val status = record.status
+            val key = listOf(pattern, method, status?.toString().orEmpty(), responseBody).joinToString("\u001f")
+            if (!uniqueRules.add(key)) return@forEach
+            rules.put(JSONObject()
+                .put("id", UUID.randomUUID().toString())
+                .put("urlPattern", pattern)
+                .put("responseBody", responseBody)
+                .put("responseStatusCode", status ?: JSONObject.NULL)
+                .put("httpMethod", if (method.isBlank()) JSONObject.NULL else method)
+                .put("isEnabled", true)
+                .put("matchType", "exact"))
+        }
+
+        val settings = JSONObject(networkInjectionSettingsJSON())
+        val rewrite = settings.optJSONObject("rewrite") ?: JSONObject()
+        rewrite.put("isEnabled", true)
+            .put("rules", rules)
+            .put("shortCircuitEnabled", true)
+        settings.put("rewrite", rewrite)
+        applyNetworkInjectionSettingsJSON(settings.toString())
+        return "Replaced existing Response Modifier rules with ${rules.length()} rule(s) from this session. Response Modifier is now active."
+    }
+
+    private fun networkSessionRequestJSONObject(record: NetworkRecord): JSONObject {
+        val timestamp = SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date(record.timestamp))
+        return JSONObject()
+            .put("id", record.id)
+            .put("url", record.url)
+            .put("method", record.method)
+            .put("statusCode", record.status.toString())
+            .put("timestamp", timestamp)
+            .put("timestampMilliseconds", record.timestamp)
+            .put("durationMilliseconds", record.durationMs.toInt())
+            .put("requestBytes", record.requestBytes)
+            .put("responseBytes", record.responseBytes)
+            .put("requestHeaders", JSONObject().apply { record.requestHeaders.forEach { (key, values) -> put(key, values.joinToString(", ")) } })
+            .put("responseHeaders", JSONObject().apply { record.responseHeaders.forEach { (key, values) -> put(key, values.joinToString(", ")) } })
+            .put("requestBody", record.requestBody)
+            .put("responseBody", record.responseBody)
+            .put("decryptedResponseBody", record.decryptedResponseBody)
+            .put("requestBodyBase64", android.util.Base64.encodeToString(record.requestBody.toByteArray(StandardCharsets.UTF_8), android.util.Base64.NO_WRAP))
+            .put("responseBodyBase64", android.util.Base64.encodeToString(record.responseBody.toByteArray(StandardCharsets.UTF_8), android.util.Base64.NO_WRAP))
+            .put("decryptedResponseBodyBase64", android.util.Base64.encodeToString(record.decryptedResponseBody.toByteArray(StandardCharsets.UTF_8), android.util.Base64.NO_WRAP))
+            .put("mimeType", headerValue(record.responseHeaders, "Content-Type") ?: "")
+            .put("error", record.error)
+            .put("graphqlOperation", record.graphqlOperation)
+            .put("source", record.source)
+            .put("isSuccess", record.error.isBlank())
     }
 
     /** Structured connection and frame data for the shared SwiftUI WebSocket inspector. */
@@ -2028,6 +2197,7 @@ object AndroidDebugTools {
             "webview_network" -> networkRecords.filter { it.source == "webview" }
             "graphql" -> networkRecords.filter { it.source == "http" && it.graphqlOperation.isNotBlank() }
             "har_export" -> networkRecords.filter { it.source == "http" }
+            "network_history" -> networkHistoryRecords.toList()
             else -> networkRecords.filter { it.source == "http" }
         }
         val record = records.firstOrNull { it.id == requestID }
@@ -2043,7 +2213,8 @@ object AndroidDebugTools {
                 shareExport(file, context)
             }
             "delete" -> {
-                networkRecords.removeAll { it.id == record.id }
+                if (featureID == "network_history") networkHistoryRecords.removeAll { it.id == record.id }
+                else networkRecords.removeAll { it.id == record.id }
                 persistNetworkHistory()
                 publishEvent("network", "Removed ${record.method} ${record.url}")
                 "Request removed."
@@ -2663,18 +2834,11 @@ object AndroidDebugTools {
                 return "HTTP history cleared."
             }
             "network_history" -> {
-                networkRecords.clear()
-                clearWebSocketHistory()
-                networkFilter = ""
-                synchronized(this) {
-                    thresholdCount = 0
-                    thresholdStartMs = SystemClock.elapsedRealtime()
-                    thresholdRequestTimes.clear()
-                    endpointThresholdCounts.clear()
-                }
+                networkHistoryRecords.clear()
+                currentNetworkSessionID = UUID.randomUUID().toString()
                 persistNetworkHistory()
-                publishEvent("network", "Network history cleared")
-                return "Network and WebSocket history cleared."
+                publishEvent("network", "Saved network sessions cleared")
+                return "Saved network sessions cleared."
             }
             "console" -> consoleRecords.clear()
             "agent_debug_log" -> {
