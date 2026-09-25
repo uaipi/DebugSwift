@@ -1615,7 +1615,11 @@ object AndroidDebugTools {
     }
 
     private fun decodeWebSocketPayload(payload: ByteArray): String? = runCatching {
-        StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(payload)).toString()
+        StandardCharsets.UTF_8.newDecoder()
+            .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+            .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+            .decode(ByteBuffer.wrap(payload))
+            .toString()
     }.getOrNull()
 
     fun recordWebViewHost(host: String) {
@@ -1927,6 +1931,84 @@ object AndroidDebugTools {
                 .put("isSuccess", record.error.isBlank()))
         }
         return JSONObject().put("requests", rows).toString()
+    }
+
+    /** Structured connection and frame data for the shared SwiftUI WebSocket inspector. */
+    fun webSocketInspectorSnapshotJSON(connectionID: String, query: String, direction: String): String {
+        val connections = webSocketConnections.sortedByDescending { it.lastActivityAtMs }
+        val connectionRows = JSONArray()
+        connections.forEach { connection ->
+            val sentCount = connection.frames.count { it.direction.equals("Sent", ignoreCase = true) }
+            connectionRows.put(JSONObject()
+                .put("id", connection.id)
+                .put("url", connection.url)
+                .put("name", connection.url)
+                .put("status", connection.status)
+                .put("statusDetail", connection.statusDetail)
+                .put("createdAtMilliseconds", connection.createdAtMs)
+                .put("lastActivityAtMilliseconds", connection.lastActivityAtMs)
+                .put("frameCount", connection.frames.size)
+                .put("sentCount", sentCount)
+                .put("receivedCount", connection.frames.size - sentCount)
+                .put("unreadFrameCount", connection.unreadFrameCount.get()))
+        }
+
+        val frameRows = JSONArray()
+        val selectedConnection = connections.firstOrNull { it.id == connectionID }
+        selectedConnection?.frames?.sortedByDescending { it.timestampMs }?.forEach { frame ->
+            val payloadText = decodeWebSocketPayload(frame.payload).orEmpty()
+            val normalizedQuery = query.trim()
+            if (direction.isNotBlank() && !frame.direction.equals(direction, ignoreCase = true)) return@forEach
+            if (normalizedQuery.isNotEmpty() && !payloadText.contains(normalizedQuery, ignoreCase = true)) return@forEach
+
+            val hexLimit = minOf(frame.payload.size, 4_096)
+            val hex = frame.payload.take(hexLimit).joinToString(" ") { "%02X".format(it.toInt() and 0xFF) }
+            frameRows.put(JSONObject()
+                .put("id", frame.id)
+                .put("connectionID", selectedConnection.id)
+                .put("timestampMilliseconds", frame.timestampMs)
+                .put("direction", frame.direction)
+                .put("type", frame.type)
+                .put("size", frame.payload.size)
+                .put("payload", payloadText)
+                .put("prettyPayload", payloadText.takeIf { it.isNotEmpty() }?.let(::prettyWebSocketPayload).orEmpty())
+                .put("payloadBase64", android.util.Base64.encodeToString(frame.payload, android.util.Base64.NO_WRAP))
+                .put("hexDump", hex)
+                .put("hexTruncated", frame.payload.size > hexLimit))
+        }
+        return JSONObject()
+            .put("connections", connectionRows)
+            .put("frames", frameRows)
+            .toString()
+    }
+
+    /** Native WebSocket operations used by the shared SwiftUI inspector. */
+    fun performWebSocketInspectorAction(
+        actionID: String,
+        connectionID: String,
+        frameID: String,
+        value: String
+    ): String {
+        val context = appContext ?: return "Android runtime has not been installed."
+        if (actionID == "clear_all") return clearWebSocketHistory()
+        val connection = webSocketConnections.firstOrNull { it.id == connectionID }
+            ?: return "This WebSocket connection is no longer available."
+        selectedWebSocketConnectionID = connectionID
+        selectedWebSocketFrameID = frameID
+        return when (actionID) {
+            "select_connection" -> {
+                connection.unreadFrameCount.set(0)
+                "Connection opened."
+            }
+            "close_connection" -> closeSelectedWebSocketConnection()
+            "clear_frames" -> clearSelectedWebSocketFrames()
+            "copy_url" -> copyWebSocketURL(context)
+            "copy_payload" -> copyWebSocketPayload(context)
+            "send_frame" -> sendWebSocketFrame(value, resendSelected = false)
+            "resend_frame" -> sendWebSocketFrame(value, resendSelected = true)
+            "export" -> shareExport(exportWebSockets(context), context)
+            else -> "Unknown WebSocket action: $actionID."
+        }
     }
 
     fun performNetworkInspectorAction(featureID: String, actionID: String, requestID: String): String {

@@ -13,6 +13,14 @@ object DebugSwiftNativeBridge {
         AndroidDebugTools.networkInspectorSnapshotJSON(featureID)
 
     @JvmStatic
+    fun webSocketInspectorSnapshot(connectionID: String, query: String, direction: String): String =
+        AndroidDebugTools.webSocketInspectorSnapshotJSON(connectionID, query, direction)
+
+    @JvmStatic
+    fun performWebSocketInspectorAction(actionID: String, connectionID: String, frameID: String, value: String): String =
+        AndroidDebugTools.performWebSocketInspectorAction(actionID, connectionID, frameID, value)
+
+    @JvmStatic
     fun networkInspectorAction(featureID: String, actionID: String, requestID: String): String =
         AndroidDebugTools.performNetworkInspectorAction(featureID, actionID, requestID)
 
