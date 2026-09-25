@@ -27,6 +27,7 @@ import android.view.View
 import android.view.ViewGroup
 import android.webkit.CookieManager
 import android.security.keystore.KeyInfo
+import androidx.appcompat.app.AppCompatDelegate
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
 import java.io.File
@@ -152,6 +153,7 @@ object AndroidDebugTools {
         val applicationContext = context.applicationContext
         if (appContext === applicationContext) return
         appContext = applicationContext
+        restoreAppearanceOverride(applicationContext)
         loadNetworkHistory(applicationContext)
         loadCrashHistory(applicationContext)
         registerLifecycleCallbacks(applicationContext)
@@ -192,7 +194,7 @@ object AndroidDebugTools {
         return when (featureID) {
             "http", "websocket", "network_injection", "network_thresholds", "graphql", "network_encryption", "har_export", "webview_network", "network_history" -> networkSnapshot(featureID)
             "performance_overview", "performance_widget", "battery", "disk", "memory_warning", "frame_drops", "hangs", "backtraces", "leaks", "thread_checker", "super_calls" -> performanceSnapshot(context, featureID)
-            "view_hierarchy", "grid", "touches", "view_borders", "animation_control", "compose_renders", "doc_recorder", "measurement", "color_palette" -> interfaceSnapshot(context, featureID)
+            "view_hierarchy", "grid", "touches", "view_borders", "animation_control", "dark_mode", "compose_renders", "doc_recorder", "measurement", "color_palette" -> interfaceSnapshot(context, featureID)
             "files", "preferences", "keychain", "sqlite", "realm", "core_data", "swift_data", "cookies", "security_audit" -> resourcesSnapshot(context, featureID)
             "crashes", "console", "device_info", "push_token", "push_simulator", "custom_actions", "custom_info", "deep_links", "loaded_libraries", "location", "event_bus", "agent_debug_log" -> appSnapshot(context, featureID)
             else -> "Unknown DebugSwift tool: $featureID"
@@ -204,7 +206,7 @@ object AndroidDebugTools {
         return when (actionID) {
             "clear" -> clear(featureID)
             "capture" -> capture(featureID)
-            "toggle" -> toggle(featureID)
+            "toggle" -> if (featureID == "dark_mode") toggleDarkMode(context) else toggle(featureID)
             "export" -> export(featureID, context)
             "notify" -> sendLocalNotification(context, value)
             "refresh" -> snapshot(featureID)
@@ -252,6 +254,7 @@ object AndroidDebugTools {
                 "Response decryption keys cleared from this process."
             }
             "set_preference" -> writePreference(context, value)
+            "reset_dark_mode" -> resetDarkMode(context)
             "set_grid" -> setGridOptions(value)
             "simulate_memory_warning" -> simulateMemoryWarning()
             "run_query" -> {
@@ -805,11 +808,58 @@ object AndroidDebugTools {
                     "$key: ${value}×"
                 } + "\n\nUse Open Developer options to change these system-wide settings."
             }
+            "dark_mode" -> appearanceSnapshot(context)
             "compose_renders" -> "Compose recompositions observed: $composeRenderCount\nMeasured frame callbacks: $frameCount\nSlow frames: $slowFrameCount"
             "doc_recorder" -> "Recorded gestures: ${recordedInteractions.size}\nTaps: ${recordedInteractions.count { it.kind == "tap" }}\nScrolls: ${recordedInteractions.count { it.kind == "scroll" }}\nLast screenshot: ${lastRecordingPath.ifEmpty { "none" }}"
             "color_palette" -> "Most common colors in the last captured app window:\n${lastPalette.joinToString("\n").ifEmpty { "Capture a screen to sample its colors." }}"
             else -> "View hierarchy entries: ${captureHierarchy().lineSequence().count()}"
         }
+    }
+
+    private fun appearanceSnapshot(context: Context): String {
+        val override = when (AppCompatDelegate.getDefaultNightMode()) {
+            AppCompatDelegate.MODE_NIGHT_YES -> "Dark"
+            AppCompatDelegate.MODE_NIGHT_NO -> "Light"
+            else -> "Follow system"
+        }
+        val windowContext = foregroundActivity.get() ?: context
+        val nightMode = windowContext.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK
+        val effective = if (nightMode == android.content.res.Configuration.UI_MODE_NIGHT_YES) "Dark" else "Light"
+        return "Appearance override: $override\nCurrent host window: $effective\n\nToggle Dark Mode to force light or dark appearance. Follow system appearance clears the override. AppCompat host activities apply the override when their theme supports DayNight."
+    }
+
+    private fun toggleDarkMode(context: Context): String {
+        val windowContext = foregroundActivity.get() ?: context
+        val nightMode = windowContext.resources.configuration.uiMode and android.content.res.Configuration.UI_MODE_NIGHT_MASK
+        val currentlyDark = when (AppCompatDelegate.getDefaultNightMode()) {
+            AppCompatDelegate.MODE_NIGHT_YES -> true
+            AppCompatDelegate.MODE_NIGHT_NO -> false
+            else -> nightMode == android.content.res.Configuration.UI_MODE_NIGHT_YES
+        }
+        val newMode = if (currentlyDark) AppCompatDelegate.MODE_NIGHT_NO else AppCompatDelegate.MODE_NIGHT_YES
+        val override = if (newMode == AppCompatDelegate.MODE_NIGHT_YES) "dark" else "light"
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().putString("appearance_override", override).apply()
+        AppCompatDelegate.setDefaultNightMode(newMode)
+        publishEvent("interface", "Appearance forced to $override mode")
+        return "App appearance forced to ${override.replaceFirstChar { it.uppercase() }} mode. AppCompat host activities apply the override when their theme supports DayNight."
+    }
+
+    private fun resetDarkMode(context: Context): String {
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove("appearance_override").apply()
+        AppCompatDelegate.setDefaultNightMode(AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM)
+        publishEvent("interface", "Appearance follows system settings")
+        return "App appearance now follows the Android system setting."
+    }
+
+    private fun restoreAppearanceOverride(context: Context) {
+        val mode = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString("appearance_override", "system")
+        AppCompatDelegate.setDefaultNightMode(
+            when (mode) {
+                "dark" -> AppCompatDelegate.MODE_NIGHT_YES
+                "light" -> AppCompatDelegate.MODE_NIGHT_NO
+                else -> AppCompatDelegate.MODE_NIGHT_FOLLOW_SYSTEM
+            }
+        )
     }
 
     private fun resourcesSnapshot(context: Context, featureID: String): String {

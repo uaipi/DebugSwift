@@ -160,6 +160,7 @@ enum DebugSwiftArea: String, CaseIterable, Identifiable, Hashable {
                 .init("touches", "Touch Indicators", "Record touch locations and show visual feedback during interactions."),
                 .init("view_borders", "View Borders", "Outline visible native views to locate spacing and clipping issues."),
                 .init("animation_control", "Animation Settings", "Inspect the system animation scales and open Android Developer options to change them."),
+                .init("dark_mode", "Dark Mode", "Override the host app appearance or follow the Android system setting."),
                 .init("compose_renders", "Compose Render Tracking", "Record Compose composition activity and retain render counts."),
                 .init("doc_recorder", "Documentation Recorder", "Capture taps and scrolls, then save a screenshot annotated with numbered markers and arrows."),
                 .init("measurement", "Measurement Tool", "Inspect element positions, sizes, and spacing in the active window."),
@@ -500,6 +501,8 @@ struct DebugSwiftFeatureDetail: View {
             ["refresh", "capture", "clear", "export"]
         case "animation_control":
             ["refresh", "open_animation_settings"]
+        case "dark_mode":
+            ["refresh", "toggle", "reset_dark_mode"]
         case "security_audit":
             ["refresh"]
         case "touches", "view_borders", "thread_checker", "performance_widget":
@@ -539,7 +542,8 @@ struct DebugSwiftFeatureDetail: View {
         case "clear": "Clear history"
         case "export": "Export"
         case "filter_requests": "Apply filter"
-        case "toggle": feature.id == "network_thresholds" ? "Toggle request blocking" : feature.id == "agent_debug_log" ? "Start / stop capture" : "Enable / disable"
+        case "toggle": feature.id == "network_thresholds" ? "Toggle request blocking" : feature.id == "agent_debug_log" ? "Start / stop capture" : feature.id == "dark_mode" ? "Toggle dark appearance" : "Enable / disable"
+        case "reset_dark_mode": "Follow system appearance"
         case "set_delay": "Set request delay"
         case "inject_failure": "Fail next request"
         case "set_http_error": "Set HTTP error code"
