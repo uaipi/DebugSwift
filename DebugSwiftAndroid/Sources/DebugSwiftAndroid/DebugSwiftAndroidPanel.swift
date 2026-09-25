@@ -271,6 +271,8 @@ private struct DebugSwiftFeatureDestination: View {
             DebugSwiftNetworkThresholdView()
         } else if feature.id == "console" {
             DebugSwiftConsoleView()
+        } else if ["http", "graphql", "har_export", "webview_network"].contains(feature.id) {
+            DebugSwiftNetworkInspectorView(featureID: feature.id)
         } else if ["http", "websocket", "network_injection", "graphql", "network_encryption", "har_export", "webview_network", "network_history"].contains(feature.id) {
             DebugSwiftIOSNativeNetworkHost(featureID: feature.id)
                 .ignoresSafeArea(edges: .bottom)
@@ -309,6 +311,8 @@ private struct DebugSwiftFeatureDestination: View {
             DebugSwiftNetworkThresholdView()
         } else if feature.id == "console" {
             DebugSwiftConsoleView()
+        } else if ["http", "graphql", "har_export", "webview_network"].contains(feature.id) {
+            DebugSwiftNetworkInspectorView(featureID: feature.id)
         } else {
             DebugSwiftFeatureDetail(feature: feature)
         }

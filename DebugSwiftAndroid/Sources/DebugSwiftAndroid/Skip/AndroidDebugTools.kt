@@ -56,6 +56,7 @@ import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
+import java.io.IOException
 import javax.crypto.SecretKey
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
@@ -63,6 +64,13 @@ import javax.crypto.spec.SecretKeySpec
 import org.json.JSONArray
 import org.json.JSONObject
 import okhttp3.WebSocket
+import okhttp3.Call
+import okhttp3.Callback
+import okhttp3.MediaType.Companion.toMediaTypeOrNull
+import okhttp3.OkHttpClient
+import okhttp3.Request
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
 import kotlin.math.PI
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -196,8 +204,11 @@ object AndroidDebugTools {
         val decryptedResponseBody: String,
         val error: String,
         val graphqlOperation: String,
-        val source: String
+        val source: String,
+        val id: String = UUID.randomUUID().toString()
     )
+
+    private val networkReplayClient by lazy { OkHttpClient() }
 
     private class WebSocketConnectionRecord(
         val id: String,
@@ -1193,6 +1204,8 @@ object AndroidDebugTools {
         val records = when (featureID) {
             "http" -> networkRecords.filter { it.source == "http" }
             "graphql" -> networkRecords.filter { it.source == "http" && it.graphqlOperation.isNotBlank() }
+            "har_export" -> networkRecords.filter { it.source == "http" }
+            "webview_network" -> networkRecords.filter { it.source == "webview" }
             else -> networkRecords.toList()
         }
         records.forEach { record ->
@@ -1277,7 +1290,8 @@ object AndroidDebugTools {
                         decryptedResponseBody = row.optString("decryptedResponseBody"),
                         error = row.optString("error"),
                         graphqlOperation = row.optString("graphqlOperation"),
-                        source = row.optString("source", "http")
+                        source = row.optString("source", "http"),
+                        id = row.optString("id").ifBlank { UUID.randomUUID().toString() }
                     )
                 )
             }
@@ -1309,7 +1323,8 @@ object AndroidDebugTools {
                         .put("decryptedResponseBody", record.decryptedResponseBody.take(16_000))
                         .put("error", record.error)
                         .put("graphqlOperation", record.graphqlOperation)
-                        .put("source", record.source))
+                        .put("source", record.source)
+                        .put("id", record.id))
                 }
                 val target = File(context.filesDir, "debugswift-network-history.json")
                 val temporary = File(context.filesDir, "debugswift-network-history.tmp")
@@ -1369,7 +1384,8 @@ object AndroidDebugTools {
                 "\n\nRecorded navigation/resources:\n" + requests.joinToString("\n") { "${it.method} ${it.url}" }.ifEmpty { "Install DebugSwiftWebViewClient on host WebViews to record navigation and resource requests." }
         }
         if (featureID == "har_export") {
-            return "Captured requests available for HAR export: ${networkRecords.size}\nUse Export to write a .har file into the app cache."
+            val count = networkRecords.count { it.source == "http" }
+            return "Captured requests available for HAR export: $count\nUse Export to write a .har file into the app cache."
         }
         if (featureID == "network_encryption") {
             return "Registered body decryptors: ${DebugSwiftNetworkConfig.decryptors.size}\nHost-supplied keys are kept in memory for this process."
@@ -1404,6 +1420,160 @@ object AndroidDebugTools {
             else -> "HTTP requests"
         }
         return historyDescription + "Captured $capturedTitle: ${recordsForFeature.size}$filterDescription\n" + lines.joinToString("\n\n").ifEmpty { "No matching requests. Add DebugSwiftOkHttpInterceptor to the host OkHttpClient.Builder." }
+    }
+
+    fun networkInspectorSnapshotJSON(featureID: String): String {
+        val records = when (featureID) {
+            "webview_network" -> networkRecords.filter { it.source == "webview" }
+            "graphql" -> networkRecords.filter { it.source == "http" && it.graphqlOperation.isNotBlank() }
+            "har_export" -> networkRecords.filter { it.source == "http" }
+            else -> networkRecords.filter { it.source == "http" }
+        }
+        val rows = JSONArray()
+        records.takeLast(MAX_RECORDS).forEach { record ->
+            rows.put(JSONObject()
+                .put("id", record.id)
+                .put("url", record.url)
+                .put("method", record.method)
+                .put("statusCode", record.status.toString())
+                .put("timestamp", SimpleDateFormat("yyyy-MM-dd HH:mm:ss", Locale.US).format(Date(record.timestamp)))
+                .put("timestampMilliseconds", record.timestamp)
+                .put("durationMilliseconds", record.durationMs)
+                .put("requestBytes", record.requestBytes)
+                .put("responseBytes", record.responseBytes)
+                .put("requestHeaders", JSONObject().apply { record.requestHeaders.forEach { (key, values) -> put(key, values.joinToString(", ")) } })
+                .put("responseHeaders", JSONObject().apply { record.responseHeaders.forEach { (key, values) -> put(key, values.joinToString(", ")) } })
+                .put("requestBody", record.requestBody)
+                .put("responseBody", record.responseBody)
+                .put("decryptedResponseBody", record.decryptedResponseBody)
+                .put("requestBodyBase64", android.util.Base64.encodeToString(record.requestBody.toByteArray(StandardCharsets.UTF_8), android.util.Base64.NO_WRAP))
+                .put("responseBodyBase64", android.util.Base64.encodeToString(record.responseBody.toByteArray(StandardCharsets.UTF_8), android.util.Base64.NO_WRAP))
+                .put("decryptedResponseBodyBase64", android.util.Base64.encodeToString(record.decryptedResponseBody.toByteArray(StandardCharsets.UTF_8), android.util.Base64.NO_WRAP))
+                .put("mimeType", headerValue(record.responseHeaders, "Content-Type") ?: "")
+                .put("error", record.error)
+                .put("graphqlOperation", record.graphqlOperation)
+                .put("source", record.source)
+                .put("isSuccess", record.error.isBlank()))
+        }
+        return JSONObject().put("requests", rows).toString()
+    }
+
+    fun performNetworkInspectorAction(featureID: String, actionID: String, requestID: String): String {
+        val context = appContext ?: return "Android runtime has not been installed."
+        if (actionID == "copy_text") return copyToClipboard(context, "DebugSwift", requestID)
+        if (actionID == "clear") return clear(featureID)
+        if (actionID == "export_har") {
+            val file = exportHar(featureID) ?: return "There are no requests to export."
+            return shareExport(file, context)
+        }
+
+        val records = when (featureID) {
+            "webview_network" -> networkRecords.filter { it.source == "webview" }
+            "graphql" -> networkRecords.filter { it.source == "http" && it.graphqlOperation.isNotBlank() }
+            "har_export" -> networkRecords.filter { it.source == "http" }
+            else -> networkRecords.filter { it.source == "http" }
+        }
+        val record = records.firstOrNull { it.id == requestID }
+            ?: return "This request is no longer available."
+
+        return when (actionID) {
+            "copy_url" -> copyToClipboard(context, "Request URL", record.url)
+            "copy_log" -> copyToClipboard(context, "Request log", networkRecordLog(record))
+            "copy_curl" -> copyToClipboard(context, "cURL", networkRecordCurl(record))
+            "share_log" -> {
+                val file = File(context.cacheDir, "debugswift-request-${record.id.take(8)}.txt")
+                file.writeText(networkRecordLog(record))
+                shareExport(file, context)
+            }
+            "delete" -> {
+                networkRecords.removeAll { it.id == record.id }
+                persistNetworkHistory()
+                publishEvent("network", "Removed ${record.method} ${record.url}")
+                "Request removed."
+            }
+            "replay" -> replayNetworkRecord(record)
+            else -> "Unknown network action: $actionID."
+        }
+    }
+
+    private fun copyToClipboard(context: Context, label: String, text: String): String {
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+            ?: return "Android clipboard is unavailable."
+        clipboard.setPrimaryClip(ClipData.newPlainText(label, text))
+        return "$label copied."
+    }
+
+    private fun networkRecordLog(record: NetworkRecord): String = buildString {
+        appendLine("[${record.method}] ${Date(record.timestamp)} (${record.status})")
+        appendLine("\n------- URL -------\n${record.url}")
+        appendLine("\n------- REQUEST HEADER -------\n${formatHeaders(record.requestHeaders).ifBlank { "No data" }}")
+        appendLine("\n------- REQUEST -------\n${record.requestBody.ifBlank { "No data" }}")
+        appendLine("\n------- RESPONSE HEADER -------\n${formatHeaders(record.responseHeaders).ifBlank { "No data" }}")
+        appendLine("\n------- RESPONSE -------\n${record.decryptedResponseBody.ifBlank { record.responseBody.ifBlank { "No data" } }}")
+        appendLine("\n------- RESPONSE SIZE -------\n${formatBytes(record.responseBytes)}")
+        appendLine("\n------- TOTAL TIME -------\n${record.durationMs}ms")
+        append("\n------- MIME TYPE -------\n${headerValue(record.responseHeaders, "Content-Type") ?: "No data"}")
+    }
+
+    private fun networkRecordCurl(record: NetworkRecord): String = buildString {
+        append("curl -X ").append(record.method).append(" '").append(record.url.replace("'", "'\\''")).append("'")
+        record.requestHeaders.forEach { (name, values) ->
+            val sensitive = name.equals("Authorization", true) || name.equals("Cookie", true) || name.equals("Set-Cookie", true)
+            val value = if (sensitive) "<redacted>" else values.joinToString(", ")
+            append(" -H '").append(name.replace("'", "'\\''")).append(": ").append(value.replace("'", "'\\''")).append("'")
+        }
+        if (record.requestBody.isNotEmpty()) {
+            append(" --data-raw '").append(record.requestBody.replace("'", "'\\''")).append("'")
+        }
+    }
+
+    private fun replayNetworkRecord(record: NetworkRecord): String {
+        val method = record.method.uppercase(Locale.ROOT)
+        val requestBody = if (method == "GET" || method == "HEAD") null else
+            record.requestBody.toRequestBody(headerValue(record.requestHeaders, "Content-Type")?.toMediaTypeOrNull())
+        val request = runCatching {
+            Request.Builder().url(record.url).apply {
+                record.requestHeaders.forEach { (name, values) -> values.forEach { addHeader(name, it) } }
+            }.method(method, requestBody).build()
+        }.getOrElse { return "Could not replay request: ${it.message ?: "invalid request"}" }
+        val started = SystemClock.elapsedRealtime()
+        networkReplayClient.newCall(request).enqueue(object : Callback {
+            override fun onFailure(call: Call, error: IOException) {
+                recordNetwork(
+                    method = method,
+                    url = record.url,
+                    status = 0,
+                    durationMs = SystemClock.elapsedRealtime() - started,
+                    requestBytes = record.requestBody.toByteArray(StandardCharsets.UTF_8).size.toLong(),
+                    responseBytes = 0,
+                    requestBody = record.requestBody,
+                    responseBody = "",
+                    error = error.localizedMessage ?: "Replay failed",
+                    requestHeaders = record.requestHeaders,
+                    source = record.source
+                )
+            }
+
+            override fun onResponse(call: Call, response: Response) {
+                response.use {
+                    val bytes = it.body?.bytes() ?: ByteArray(0)
+                    recordNetwork(
+                        method = method,
+                        url = record.url,
+                        status = it.code,
+                        durationMs = SystemClock.elapsedRealtime() - started,
+                        requestBytes = record.requestBody.toByteArray(StandardCharsets.UTF_8).size.toLong(),
+                        responseBytes = bytes.size.toLong(),
+                        requestBody = record.requestBody,
+                        responseBody = String(bytes, StandardCharsets.UTF_8),
+                        requestHeaders = record.requestHeaders,
+                        responseHeaders = it.headers.toMultimap(),
+                        source = record.source
+                    )
+                }
+            }
+        })
+        return "Request replay started. Its response will appear in the request list."
     }
 
     private fun filteredWebSocketConnections(): List<WebSocketConnectionRecord> {
@@ -1928,7 +2098,14 @@ object AndroidDebugTools {
             "websocket" -> {
                 return clearWebSocketHistory()
             }
-            "network_history", "har_export" -> {
+            "har_export" -> {
+                networkRecords.removeAll { it.source == "http" }
+                networkFilter = ""
+                persistNetworkHistory()
+                publishEvent("network", "HTTP history cleared")
+                return "HTTP history cleared."
+            }
+            "network_history" -> {
                 networkRecords.clear()
                 clearWebSocketHistory()
                 networkFilter = ""

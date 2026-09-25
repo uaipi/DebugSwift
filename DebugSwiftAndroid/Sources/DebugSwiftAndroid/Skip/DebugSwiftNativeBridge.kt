@@ -9,6 +9,14 @@ object DebugSwiftNativeBridge {
     fun securityAuditSnapshot(): String = AndroidDebugTools.securityAuditSnapshot()
 
     @JvmStatic
+    fun networkInspectorSnapshot(featureID: String): String =
+        AndroidDebugTools.networkInspectorSnapshotJSON(featureID)
+
+    @JvmStatic
+    fun networkInspectorAction(featureID: String, actionID: String, requestID: String): String =
+        AndroidDebugTools.performNetworkInspectorAction(featureID, actionID, requestID)
+
+    @JvmStatic
     fun perform(featureID: String, actionID: String, value: String): String =
         AndroidDebugTools.perform(featureID, actionID, value)
 
