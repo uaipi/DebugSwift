@@ -47,11 +47,12 @@ private struct DebugSwiftAndroidPanelContent: View {
             }
 
             #if os(iOS)
-            if selectedArea == .interface {
+            if selectedArea == .interface || selectedArea == .resources {
                 NavigationStack {
                     DebugSwiftFeatureList(area: selectedArea)
                         .navigationTitle(selectedArea.title)
                 }
+                .id(selectedArea.id)
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
             } else {
                 DebugSwiftIOSFeatureHost(area: selectedArea)
@@ -165,6 +166,20 @@ enum DebugSwiftArea: String, CaseIterable, Identifiable, Hashable {
             ]
             #endif
         case .resources:
+            #if os(iOS)
+            let availableIDs = Set(DebugSwift.availableResourceFeatureIDs())
+            return [
+                .init("files", "Files", "Browse files in the app sandbox and shared containers."),
+                .init("user_defaults", "User Defaults", "Inspect and compare registered preferences."),
+                .init("keychain", "Keychain", "Browse app keychain items."),
+                .init("persistent_data", "Persistent Data", "Inspect persistent app data."),
+                .init("core_data", "Core Data", "Browse Core Data stores and entities."),
+                .init("swift_data", "SwiftData Browser", "Inspect SwiftData models and records."),
+                .init("http_cookies", "HTTP Cookies", "Inspect cookies stored by the app."),
+                .init("database", "Database Browser", "Browse SQLite tables and rows."),
+                .init("security_audit", "Security Audit", "Scan app resources for sensitive data.")
+            ].filter { availableIDs.contains($0.id) }
+            #else
             return [
                 .init("files", "File Browser", "Browse the app sandbox, databases, cache, and exported files."),
                 .init("preferences", "Preferences", "View and update registered Android SharedPreferences values."),
@@ -176,6 +191,7 @@ enum DebugSwiftArea: String, CaseIterable, Identifiable, Hashable {
                 .init("cookies", "HTTP Cookies", "Inspect WebView cookies for app-owned domains."),
                 .init("security_audit", "Security Audit", "Find sensitive-looking keys in registered preferences and app-private text files.")
             ]
+            #endif
         case .app:
             return [
                 .init("crashes", "Crash Reports", "Save uncaught application crashes with stack traces and timestamps."),
@@ -242,6 +258,18 @@ private struct DebugSwiftFeatureDestination: View {
         } else if ["swiftui_render", "doc_recorder", "color_palette"].contains(feature.id) {
             DebugSwiftIOSNativeInterfaceHost(featureID: feature.id)
                 .ignoresSafeArea(edges: .bottom)
+        } else if ["files", "user_defaults", "keychain", "persistent_data", "core_data", "swift_data", "http_cookies", "database", "security_audit"].contains(feature.id) {
+            if feature.id == "swift_data" {
+                if #available(iOS 17.0, *) {
+                    DebugSwiftIOSNativeResourceHost(featureID: feature.id)
+                        .ignoresSafeArea(edges: .bottom)
+                } else {
+                    Text("SwiftData Browser requires iOS 17 or newer.")
+                }
+            } else {
+                DebugSwiftIOSNativeResourceHost(featureID: feature.id)
+                    .ignoresSafeArea(edges: .bottom)
+            }
         } else {
             DebugSwiftFeatureDetail(feature: feature)
         }
@@ -376,6 +404,17 @@ private struct DebugSwiftIOSNativeInterfaceHost: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> UIViewController {
         DebugSwiftAndroidRuntime.prepareIOSDebugger()
         return DebugSwift.debugInterfaceViewController(for: featureID) ?? UIViewController()
+    }
+
+    func updateUIViewController(_ viewController: UIViewController, context: Context) {}
+}
+
+private struct DebugSwiftIOSNativeResourceHost: UIViewControllerRepresentable {
+    let featureID: String
+
+    func makeUIViewController(context: Context) -> UIViewController {
+        DebugSwiftAndroidRuntime.prepareIOSDebugger()
+        return DebugSwift.debugResourceViewController(for: featureID) ?? UIViewController()
     }
 
     func updateUIViewController(_ viewController: UIViewController, context: Context) {}
