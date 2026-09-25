@@ -95,6 +95,7 @@ object AndroidDebugTools {
     @Volatile private var gridOpacity = 0.5f
     @Volatile private var gridColorIndex = 0
     @Volatile private var gridColor = gridColors[0]
+    @Volatile private var simulatedMemoryWarningCount = 0
     private var lastLocation = "No location has been reported by the host app."
     private var pushToken = "No FCM token has been reported by the host app."
     private var thresholdLimit = 0
@@ -185,7 +186,7 @@ object AndroidDebugTools {
         val context = appContext ?: return "Android runtime has not been installed. Call AndroidDebugTools.install(application) from the host app."
         return when (featureID) {
             "http", "websocket", "network_injection", "network_thresholds", "graphql", "network_encryption", "har_export", "webview_network", "network_history" -> networkSnapshot(featureID)
-            "performance_overview", "performance_widget", "battery", "disk", "frame_drops", "hangs", "backtraces", "leaks", "thread_checker", "super_calls" -> performanceSnapshot(context, featureID)
+            "performance_overview", "performance_widget", "battery", "disk", "memory_warning", "frame_drops", "hangs", "backtraces", "leaks", "thread_checker", "super_calls" -> performanceSnapshot(context, featureID)
             "view_hierarchy", "grid", "touches", "view_borders", "animation_control", "compose_renders", "doc_recorder", "measurement", "color_palette" -> interfaceSnapshot(context, featureID)
             "files", "preferences", "keychain", "sqlite", "realm", "core_data", "swift_data", "cookies", "security_audit" -> resourcesSnapshot(context, featureID)
             "crashes", "console", "device_info", "push_token", "push_simulator", "custom_actions", "custom_info", "deep_links", "loaded_libraries", "location", "event_bus", "agent_debug_log" -> appSnapshot(context, featureID)
@@ -247,6 +248,7 @@ object AndroidDebugTools {
             }
             "set_preference" -> writePreference(context, value)
             "set_grid" -> setGridOptions(value)
+            "simulate_memory_warning" -> simulateMemoryWarning()
             "run_query" -> {
                 val parts = value.split("|", limit = 2)
                 if (parts.size != 2) "Enter databaseName|SELECT ..."
@@ -724,6 +726,7 @@ object AndroidDebugTools {
 
     private fun performanceSnapshot(context: Context, featureID: String): String {
         return when (featureID) {
+            "memory_warning" -> "Simulated callbacks sent: $simulatedMemoryWarningCount\nThe action calls Application.onLowMemory and foreground Activity low-memory/critical-trim callbacks. Android does not let an app force the operating system to enter real memory pressure."
             "battery" -> {
                 val intent = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
                 val level = intent?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
@@ -766,6 +769,24 @@ object AndroidDebugTools {
                 "CPU usage: ${"%.1f".format(cpuUsagePercent)}%\nProcess memory: ${formatBytes(used)} / ${formatBytes(runtime.maxMemory())}\nNative heap: ${formatBytes(Debug.getNativeHeapAllocatedSize())}\nSystem available memory: ${formatBytes(memory.availMem)}\nCPU time: ${cpu}ms\nFrames sampled: $frameCount (${slowFrameCount} slow)"
             }
         }
+    }
+
+    private fun simulateMemoryWarning(): String {
+        val application = appContext?.applicationContext as? Application
+        val activity = foregroundActivity.get()
+        if (application == null && activity == null) return "No Android Application or foreground Activity is available."
+
+        mainHandler.post {
+            simulatedMemoryWarningCount += 1
+            runCatching { application?.onLowMemory() }
+            runCatching { application?.onTrimMemory(android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) }
+            if (activity != null) {
+                runCatching { activity.onLowMemory() }
+                runCatching { activity.onTrimMemory(android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL) }
+            }
+            publishEvent("performance", "Android low-memory callbacks simulated")
+        }
+        return "Sent low-memory and critical-trim callbacks to the Application and foreground Activity. This does not create real OS memory pressure."
     }
 
     private fun interfaceSnapshot(context: Context, featureID: String): String {

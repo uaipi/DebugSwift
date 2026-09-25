@@ -131,6 +131,7 @@ enum DebugSwiftArea: String, CaseIterable, Identifiable, Hashable {
                 .init("performance_widget", "Performance Widget", "Show live CPU, memory, and slow-frame metrics over the host app."),
                 .init("battery", "Battery", "Inspect battery level, charging state, and power source."),
                 .init("disk", "Disk I/O", "Inspect app storage size and process read/write byte counters."),
+                .init("memory_warning", "Memory Warning", "Send low-memory callbacks to the Android Application and foreground Activity."),
                 .init("frame_drops", "Frame Drops", "Record slow frames and inspect their timing on a timeline."),
                 .init("hangs", "Hangs and ANRs", "Detect main thread stalls and inspect captured stack traces."),
                 .init("backtraces", "Backtraces", "Capture and browse call stacks on demand."),
@@ -473,6 +474,8 @@ struct DebugSwiftFeatureDetail: View {
             ["refresh", "capture", "clear", "export"]
         case "agent_debug_log":
             ["refresh", "toggle", "clear", "export"]
+        case "memory_warning":
+            ["refresh", "simulate_memory_warning"]
         case "graphql", "network_history":
             ["refresh", "filter_requests", "clear", "export"]
         case "network_injection":
@@ -544,6 +547,7 @@ struct DebugSwiftFeatureDetail: View {
         case "set_threshold": "Set request threshold"
         case "register_key": "Register AES key"
         case "set_grid": "Set grid spacing and color"
+        case "simulate_memory_warning": "Simulate memory warning"
         case "set_preference": "Write preference"
         case "browse_files": "Open path"
         case "notify": "Post test notification"
