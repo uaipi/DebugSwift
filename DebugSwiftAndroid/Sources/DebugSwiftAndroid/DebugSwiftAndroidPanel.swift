@@ -492,7 +492,7 @@ struct DebugSwiftFeatureDetail: View {
     var actionIDs: [String] {
         switch feature.id {
         case "http":
-            ["refresh", "filter_requests", "clear", "export"]
+            ["refresh", "filter_requests", "select_request", "clear", "export"]
         case "websocket", "har_export", "console", "crashes", "backtraces", "event_bus":
             ["refresh", "capture", "clear", "export"]
         case "oslog_console":
@@ -502,7 +502,7 @@ struct DebugSwiftFeatureDetail: View {
         case "memory_warning":
             ["refresh", "simulate_memory_warning"]
         case "graphql", "network_history":
-            ["refresh", "filter_requests", "clear", "export"]
+            ["refresh", "filter_requests", "select_request", "clear", "export"]
         case "network_injection":
             ["refresh", "set_delay", "inject_failure", "set_http_error", "rewrite_response", "block_url", "toggle"]
         case "network_thresholds":
@@ -546,7 +546,7 @@ struct DebugSwiftFeatureDetail: View {
 
     var inputHint: String? {
         switch feature.id {
-        case "http", "graphql", "network_history": "Filter requests by URL, method, or body"
+        case "http", "graphql", "network_history": "Filter by URL, method, or body; enter a list number for details"
         case "oslog_console": "Filter log message or tag"
         case "network_injection": "Value: ms, status, pattern=>body, or URL pattern"
         case "network_thresholds": "Request limit,window seconds"
@@ -569,6 +569,7 @@ struct DebugSwiftFeatureDetail: View {
         case "clear": "Clear history"
         case "export": "Export"
         case "filter_requests": "Apply filter"
+        case "select_request": "Open request details"
         case "filter_logs": "Apply log filter"
         case "toggle": feature.id == "network_thresholds" ? "Toggle request blocking" : feature.id == "agent_debug_log" ? "Start / stop capture" : feature.id == "dark_mode" ? "Toggle dark appearance" : feature.id == "push_simulator" ? "Enable / disable simulation" : "Enable / disable"
         case "reset_dark_mode": "Follow system appearance"

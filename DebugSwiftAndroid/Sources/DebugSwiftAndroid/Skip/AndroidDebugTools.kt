@@ -431,6 +431,7 @@ object AndroidDebugTools {
                 networkFilter = value.trim()
                 networkSnapshot(featureID)
             }
+            "select_request" -> selectNetworkRequest(featureID, value)
             "filter_logs" -> {
                 logcatFilter = value.trim()
                 logcatSnapshot()
@@ -915,8 +916,8 @@ object AndroidDebugTools {
             query.isEmpty() || listOf(record.url, record.method, record.requestBody, record.responseBody, record.graphqlOperation)
                 .any { it.lowercase().contains(query) }
         }
-        val lines = matchingRecords.takeLast(40).asReversed().map { record ->
-            "${record.method} ${record.url}\n  ${record.status} · ${record.durationMs}ms · ${record.responseBytes} bytes" +
+        val lines = matchingRecords.takeLast(40).asReversed().mapIndexed { index, record ->
+            "#${index + 1} ${record.method} ${record.url}\n  ${record.status} · ${record.durationMs}ms · ${record.responseBytes} bytes" +
                 (record.graphqlOperation.takeIf { it.isNotBlank() }?.let { "\n  GraphQL: $it" } ?: "") +
                 (record.error.takeIf { it.isNotBlank() }?.let { "\n  Error: $it" } ?: "") +
                 (formatHeaders(record.requestHeaders).takeIf { it.isNotBlank() }?.let { "\n  Request headers:\n$it" } ?: "") +
@@ -932,6 +933,48 @@ object AndroidDebugTools {
             else -> "HTTP requests"
         }
         return historyDescription + "Captured $capturedTitle: ${recordsForFeature.size}$filterDescription\n" + lines.joinToString("\n\n").ifEmpty { "No matching requests. Add DebugSwiftOkHttpInterceptor to the host OkHttpClient.Builder." }
+    }
+
+    private fun selectNetworkRequest(featureID: String, value: String): String {
+        if (featureID !in setOf("http", "graphql", "network_history")) {
+            return "Request details are not available for $featureID."
+        }
+        val records = when (featureID) {
+            "http" -> networkRecords.filter { it.source == "http" }
+            "graphql" -> networkRecords.filter { it.source == "http" && it.graphqlOperation.isNotBlank() }
+            else -> networkRecords.toList()
+        }
+        val matching = records.filter { record ->
+            val query = networkFilter.trim().lowercase()
+            query.isEmpty() || listOf(record.url, record.method, record.requestBody, record.responseBody, record.graphqlOperation)
+                .any { it.lowercase().contains(query) }
+        }.takeLast(40).asReversed()
+        val index = value.trim().toIntOrNull()
+        val selected = if (index != null) matching.getOrNull(index - 1) else {
+            val query = value.trim()
+            matching.firstOrNull { it.url.contains(query, ignoreCase = true) || it.graphqlOperation.contains(query, ignoreCase = true) }
+        }
+        if (selected == null) {
+            return if (index != null) "No request at position $index. Refresh the list; request numbers start at 1 with the newest request."
+            else "Enter a request number from the list, or a URL/GraphQL operation name to search."
+        }
+        return buildString {
+            appendLine("${selected.method} ${selected.url}")
+            appendLine("Status: ${selected.status}")
+            appendLine("Duration: ${selected.durationMs}ms")
+            appendLine("Started: ${Date(selected.timestamp)}")
+            appendLine("Request size: ${formatBytes(selected.requestBytes)}")
+            appendLine("Response size: ${formatBytes(selected.responseBytes)}")
+            selected.graphqlOperation.takeIf { it.isNotBlank() }?.let { appendLine("GraphQL operation: $it") }
+            selected.error.takeIf { it.isNotBlank() }?.let { appendLine("Error: $it") }
+            appendLine("\nRequest headers\n${formatHeaders(selected.requestHeaders).ifBlank { "(none)" }}")
+            appendLine("\nRequest body\n${selected.requestBody.ifBlank { "(none)" }}")
+            appendLine("\nResponse headers\n${formatHeaders(selected.responseHeaders).ifBlank { "(none)" }}")
+            appendLine("\nResponse body\n${selected.responseBody.ifBlank { "(none)" }}")
+            if (selected.decryptedResponseBody.isNotBlank() && selected.decryptedResponseBody != selected.responseBody) {
+                appendLine("\nDecrypted response body\n${selected.decryptedResponseBody}")
+            }
+        }
     }
 
     private fun performanceSnapshot(context: Context, featureID: String): String {
