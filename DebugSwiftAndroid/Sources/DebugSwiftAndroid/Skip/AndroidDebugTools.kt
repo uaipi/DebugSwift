@@ -38,6 +38,8 @@ import androidx.core.content.FileProvider
 import java.io.File
 import java.io.PrintWriter
 import java.io.StringWriter
+import java.nio.ByteBuffer
+import java.nio.charset.StandardCharsets
 import java.lang.ref.WeakReference
 import java.security.KeyStore
 import java.security.KeyFactory
@@ -53,12 +55,14 @@ import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledFuture
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import javax.crypto.SecretKey
 import javax.crypto.SecretKeyFactory
 import javax.crypto.spec.GCMParameterSpec
 import javax.crypto.spec.SecretKeySpec
 import org.json.JSONArray
 import org.json.JSONObject
+import okhttp3.WebSocket
 import kotlin.math.PI
 import kotlin.math.atan2
 import kotlin.math.cos
@@ -70,6 +74,8 @@ object AndroidDebugTools {
     private const val TAG = "DebugSwift"
     private const val PREFS = "debugswift.android"
     private const val MAX_RECORDS = 500
+    private const val MAX_WEBSOCKET_CONNECTIONS = 200
+    private const val MAX_WEBSOCKET_FRAMES = 1000
     private const val MAIN_THREAD_STALL_MS = 700L
     private const val NOTIFICATION_CHANNEL = "debugswift_local_tests"
     private const val PUSH_HISTORY_PAGE_SIZE = 20
@@ -89,6 +95,14 @@ object AndroidDebugTools {
     }
     private val networkRecords = CopyOnWriteArrayList<NetworkRecord>()
     private val webSocketRecords = CopyOnWriteArrayList<String>()
+    private val webSocketConnections = CopyOnWriteArrayList<WebSocketConnectionRecord>()
+    private val webSocketByInstance = ConcurrentHashMap<WebSocket, String>()
+    private val activeWebSockets = ConcurrentHashMap<String, WebSocket>()
+    private val legacyWebSocketIDs = ConcurrentHashMap<String, String>()
+    @Volatile private var selectedWebSocketConnectionID = ""
+    @Volatile private var selectedWebSocketFrameID = ""
+    @Volatile private var webSocketFilter = ""
+    @Volatile private var webSocketDirectionFilter = ""
     private val consoleRecords = CopyOnWriteArrayList<String>()
     private val crashRecords = CopyOnWriteArrayList<String>()
     private val backtraces = CopyOnWriteArrayList<String>()
@@ -166,6 +180,28 @@ object AndroidDebugTools {
         val error: String,
         val graphqlOperation: String,
         val source: String
+    )
+
+    private class WebSocketConnectionRecord(
+        val id: String,
+        val url: String,
+        val createdAtMs: Long = System.currentTimeMillis()
+    ) {
+        @Volatile var status: String = "Connecting"
+        @Volatile var statusDetail: String = ""
+        @Volatile var lastActivityAtMs: Long = createdAtMs
+        val unreadFrameCount = AtomicInteger(0)
+        val frames = CopyOnWriteArrayList<WebSocketFrameRecord>()
+
+        fun isActive(): Boolean = status == "Connecting" || status == "Connected" || status == "Closing"
+    }
+
+    private data class WebSocketFrameRecord(
+        val id: String,
+        val timestampMs: Long,
+        val direction: String,
+        val type: String,
+        val payload: ByteArray
     )
 
     private data class PushNotificationRecord(
@@ -432,6 +468,28 @@ object AndroidDebugTools {
                 networkSnapshot(featureID)
             }
             "select_request" -> selectNetworkRequest(featureID, value)
+            "filter_websockets" -> {
+                webSocketFilter = value.trim()
+                selectedWebSocketFrameID = ""
+                webSocketSnapshot()
+            }
+            "select_connection" -> selectWebSocketConnection(value)
+            "select_frame" -> selectWebSocketFrame(value)
+            "filter_sent" -> { webSocketDirectionFilter = "Sent"; selectedWebSocketFrameID = ""; webSocketSnapshot() }
+            "filter_received" -> { webSocketDirectionFilter = "Received"; selectedWebSocketFrameID = ""; webSocketSnapshot() }
+            "filter_all_frames" -> { webSocketDirectionFilter = ""; selectedWebSocketFrameID = ""; webSocketSnapshot() }
+            "copy_url" -> copyWebSocketURL(context)
+            "copy_payload" -> copyWebSocketPayload(context)
+            "close_connection" -> closeSelectedWebSocketConnection()
+            "clear_frames" -> clearSelectedWebSocketFrames()
+            "back_connections" -> {
+                selectedWebSocketConnectionID = ""
+                selectedWebSocketFrameID = ""
+                webSocketDirectionFilter = ""
+                webSocketSnapshot()
+            }
+            "send_frame" -> sendWebSocketFrame(value, resendSelected = false)
+            "resend_frame" -> sendWebSocketFrame(value, resendSelected = true)
             "filter_logs" -> {
                 logcatFilter = value.trim()
                 logcatSnapshot()
@@ -665,13 +723,175 @@ object AndroidDebugTools {
         return rewritten
     }
 
+    fun webSocketOpened(webSocket: WebSocket, url: String, responseCode: Int) {
+        val connection = findOrCreateWebSocketConnection(webSocket, url)
+        connection.status = "Connected"
+        connection.statusDetail = "HTTP $responseCode"
+        connection.lastActivityAtMs = System.currentTimeMillis()
+        recordWebSocketEvent(connection, "connected", connection.statusDetail)
+    }
+
+    fun recordWebSocketFrame(
+        webSocket: WebSocket,
+        url: String,
+        direction: String,
+        type: String,
+        payload: ByteArray
+    ) {
+        val connection = findOrCreateWebSocketConnection(webSocket, url)
+        if (connection.status == "Connecting") connection.status = "Connected"
+        recordWebSocketFrame(connection, direction, type, payload)
+    }
+
+    fun webSocketClosing(webSocket: WebSocket, url: String, code: Int, reason: String) {
+        val connection = findOrCreateWebSocketConnection(webSocket, url)
+        connection.status = "Closing"
+        connection.statusDetail = listOf(code.toString(), reason).filter { it.isNotBlank() }.joinToString(" · ")
+        connection.lastActivityAtMs = System.currentTimeMillis()
+        recordWebSocketEvent(connection, "closing", connection.statusDetail)
+    }
+
+    fun webSocketClosed(webSocket: WebSocket, url: String, code: Int, reason: String) {
+        val connection = findOrCreateWebSocketConnection(webSocket, url)
+        connection.status = "Closed"
+        connection.statusDetail = listOf(code.toString(), reason).filter { it.isNotBlank() }.joinToString(" · ")
+        connection.lastActivityAtMs = System.currentTimeMillis()
+        activeWebSockets.remove(connection.id, webSocket)
+        webSocketByInstance.remove(webSocket, connection.id)
+        recordWebSocketEvent(connection, "closed", connection.statusDetail)
+    }
+
+    fun webSocketFailed(webSocket: WebSocket, url: String, error: String, responseCode: Int?) {
+        val connection = findOrCreateWebSocketConnection(webSocket, url)
+        connection.status = "Error"
+        connection.statusDetail = listOfNotNull(responseCode?.let { "HTTP $it" }, error).joinToString(" · ")
+        connection.lastActivityAtMs = System.currentTimeMillis()
+        activeWebSockets.remove(connection.id, webSocket)
+        webSocketByInstance.remove(webSocket, connection.id)
+        recordWebSocketEvent(connection, "failed", connection.statusDetail)
+    }
+
+    /** Backward-compatible text hook for hosts that record frames without the listener wrapper. */
     fun recordWebSocket(url: String, direction: String, payload: String) {
-        val line = "${timestamp()} WebSocket $direction $url: ${payload.take(500)}"
+        val normalizedDirection = direction.lowercase(Locale.ROOT)
+        val connection = findOrCreateLegacyWebSocketConnection(url)
+        when (normalizedDirection) {
+            "connected" -> {
+                connection.status = "Connected"
+                connection.statusDetail = payload
+                recordWebSocketEvent(connection, direction, payload)
+            }
+            "closing" -> {
+                connection.status = "Closing"
+                connection.statusDetail = payload
+                recordWebSocketEvent(connection, direction, payload)
+            }
+            "closed" -> {
+                connection.status = "Closed"
+                connection.statusDetail = payload
+                recordWebSocketEvent(connection, direction, payload)
+            }
+            "failed", "error" -> {
+                connection.status = "Error"
+                connection.statusDetail = payload
+                recordWebSocketEvent(connection, direction, payload)
+            }
+            else -> {
+                if (!connection.isActive()) {
+                    connection.status = "Connected"
+                    connection.statusDetail = ""
+                }
+                recordWebSocketFrame(
+                    connection,
+                    if (normalizedDirection.startsWith("sent")) "Sent" else "Received",
+                    if (normalizedDirection.contains("binary")) "Binary" else "Text",
+                    payload.toByteArray(StandardCharsets.UTF_8)
+                )
+            }
+        }
+    }
+
+    private fun findOrCreateWebSocketConnection(webSocket: WebSocket, url: String): WebSocketConnectionRecord =
+        synchronized(webSocketConnections) {
+            val previousID = webSocketByInstance[webSocket]
+            if (previousID != null) {
+                webSocketConnections.firstOrNull { it.id == previousID }?.let { return@synchronized it }
+                activeWebSockets.remove(previousID)
+            }
+
+            val connection = WebSocketConnectionRecord(UUID.randomUUID().toString(), url)
+            webSocketConnections.add(connection)
+            webSocketByInstance[webSocket] = connection.id
+            activeWebSockets[connection.id] = webSocket
+            while (webSocketConnections.size > MAX_WEBSOCKET_CONNECTIONS) {
+                val removed = webSocketConnections.removeAt(0)
+                activeWebSockets.remove(removed.id)
+                legacyWebSocketIDs.forEach { (legacyURL, id) ->
+                    if (id == removed.id) legacyWebSocketIDs.remove(legacyURL, id)
+                }
+                webSocketByInstance.forEach { (socket, id) ->
+                    if (id == removed.id) webSocketByInstance.remove(socket, id)
+                }
+            }
+            connection
+        }
+
+    private fun findOrCreateLegacyWebSocketConnection(url: String): WebSocketConnectionRecord =
+        synchronized(webSocketConnections) {
+            legacyWebSocketIDs[url]?.let { id ->
+                webSocketConnections.firstOrNull { it.id == id }?.let { return@synchronized it }
+            }
+            val connection = WebSocketConnectionRecord("legacy:${UUID.randomUUID()}", url).apply {
+                status = "Connected"
+            }
+            webSocketConnections.add(connection)
+            legacyWebSocketIDs[url] = connection.id
+            while (webSocketConnections.size > MAX_WEBSOCKET_CONNECTIONS) {
+                val removed = webSocketConnections.removeAt(0)
+                activeWebSockets.remove(removed.id)
+                legacyWebSocketIDs.forEach { (legacyURL, id) ->
+                    if (id == removed.id) legacyWebSocketIDs.remove(legacyURL, id)
+                }
+                webSocketByInstance.forEach { (socket, id) ->
+                    if (id == removed.id) webSocketByInstance.remove(socket, id)
+                }
+            }
+            connection
+        }
+
+    private fun recordWebSocketFrame(
+        connection: WebSocketConnectionRecord,
+        direction: String,
+        type: String,
+        payload: ByteArray
+    ) {
+        val frame = WebSocketFrameRecord(
+            id = UUID.randomUUID().toString(),
+            timestampMs = System.currentTimeMillis(),
+            direction = direction,
+            type = type,
+            payload = payload.copyOf()
+        )
+        connection.frames.add(frame)
+        while (connection.frames.size > MAX_WEBSOCKET_FRAMES) connection.frames.removeAt(0)
+        connection.lastActivityAtMs = frame.timestampMs
+        connection.unreadFrameCount.incrementAndGet()
+        val preview = decodeWebSocketPayload(frame.payload)?.replace('\n', ' ')?.take(500)
+            ?: "<Binary Data: ${frame.payload.size} bytes>"
+        recordWebSocketEvent(connection, "${direction.lowercase(Locale.ROOT)} $type", preview)
+    }
+
+    private fun recordWebSocketEvent(connection: WebSocketConnectionRecord, action: String, payload: String) {
+        val line = "${timestamp()} WebSocket $action ${connection.url}: ${payload.take(500)}"
         webSocketRecords.add(line)
         trim(webSocketRecords)
         publishEvent("network", line)
-        log("WebSocket $direction $url: ${payload.take(500)}", Log.VERBOSE)
+        log("WebSocket $action ${connection.url}: ${payload.take(500)}", Log.VERBOSE)
     }
+
+    private fun decodeWebSocketPayload(payload: ByteArray): String? = runCatching {
+        StandardCharsets.UTF_8.newDecoder().decode(ByteBuffer.wrap(payload)).toString()
+    }.getOrNull()
 
     fun recordWebViewHost(host: String) {
         if (host.isNotBlank() && host !in webViewHosts) webViewHosts.add(host)
@@ -779,7 +999,16 @@ object AndroidDebugTools {
 
     private fun exportWebSockets(context: Context): File =
         File(context.cacheDir, "debugswift-websocket-${System.currentTimeMillis()}.txt").apply {
-            writeText(webSocketRecords.joinToString("\n\n"))
+            writeText(webSocketConnections.sortedByDescending { it.createdAtMs }.joinToString("\n\n") { connection ->
+                buildString {
+                    appendLine("${connection.url}\nStatus: ${connection.status}")
+                    appendLine("Started: ${Date(connection.createdAtMs)}")
+                    appendLine("Last activity: ${Date(connection.lastActivityAtMs)}")
+                    append(connection.frames.sortedBy { it.timestampMs }.joinToString("\n\n") { frame ->
+                        webSocketFrameSnapshot(connection, frame, forExport = true)
+                    }.ifEmpty { "No frames recorded." })
+                }
+            }.ifEmpty { webSocketRecords.joinToString("\n\n") })
         }
 
     private fun loadNetworkHistory(context: Context) {
@@ -889,8 +1118,7 @@ object AndroidDebugTools {
             return "Requests in window: $thresholdCount\nLimit: ${thresholdLimit.takeIf { it > 0 } ?: "off"}\nWindow: ${thresholdWindowMs / 1000}s\nBlock after limit: $thresholdBlockRequests"
         }
         if (featureID == "websocket") {
-            val matching = webSocketRecords.takeLast(30)
-            return "WebSocket events: ${matching.size}\n" + matching.joinToString("\n")
+            return webSocketSnapshot()
         }
         if (featureID == "webview_network") {
             val requests = networkRecords.filter { it.source == "webview" }.takeLast(30).asReversed()
@@ -904,7 +1132,7 @@ object AndroidDebugTools {
             return "Registered body decryptors: ${DebugSwiftNetworkConfig.decryptors.size}\nHost-supplied keys are kept in memory for this process."
         }
         val historyDescription = if (featureID == "network_history") {
-            "WebSocket frames: ${webSocketRecords.size}\nUp to 100 recent HTTP requests are restored from app-private storage; this process keeps at most $MAX_RECORDS.\n"
+            "WebSocket connections: ${webSocketConnections.size} · frames: ${webSocketConnections.sumOf { it.frames.size }}\nUp to 100 recent HTTP requests are restored from app-private storage; this process keeps at most $MAX_RECORDS.\n"
         } else ""
         val recordsForFeature = when (featureID) {
             "graphql" -> networkRecords.filter { it.source == "http" && it.graphqlOperation.isNotBlank() }
@@ -933,6 +1161,228 @@ object AndroidDebugTools {
             else -> "HTTP requests"
         }
         return historyDescription + "Captured $capturedTitle: ${recordsForFeature.size}$filterDescription\n" + lines.joinToString("\n\n").ifEmpty { "No matching requests. Add DebugSwiftOkHttpInterceptor to the host OkHttpClient.Builder." }
+    }
+
+    private fun filteredWebSocketConnections(): List<WebSocketConnectionRecord> {
+        val query = webSocketFilter.trim()
+        return webSocketConnections.sortedByDescending { it.lastActivityAtMs }.filter { connection ->
+            query.isEmpty() || connection.url.contains(query, ignoreCase = true) ||
+                connection.status.contains(query, ignoreCase = true) ||
+                connection.frames.any { frame ->
+                    decodeWebSocketPayload(frame.payload)?.contains(query, ignoreCase = true) == true
+                }
+        }
+    }
+
+    private fun filteredWebSocketFrames(connection: WebSocketConnectionRecord): List<WebSocketFrameRecord> {
+        val query = webSocketFilter.trim()
+        return connection.frames.sortedByDescending { it.timestampMs }.filter { frame ->
+            (webSocketDirectionFilter.isEmpty() || frame.direction.equals(webSocketDirectionFilter, ignoreCase = true)) &&
+                (query.isEmpty() || decodeWebSocketPayload(frame.payload)?.contains(query, ignoreCase = true) == true)
+        }
+    }
+
+    private fun webSocketSnapshot(): String {
+        val connection = webSocketConnections.firstOrNull { it.id == selectedWebSocketConnectionID }
+        if (connection == null) {
+            selectedWebSocketConnectionID = ""
+            selectedWebSocketFrameID = ""
+        } else {
+            val selectedFrame = connection.frames.firstOrNull { it.id == selectedWebSocketFrameID }
+            if (selectedFrame != null) return webSocketFrameSnapshot(connection, selectedFrame)
+            selectedWebSocketFrameID = ""
+
+            val frames = filteredWebSocketFrames(connection)
+            val directionLabel = webSocketDirectionFilter.takeIf { it.isNotEmpty() }?.let { " · $it only" }.orEmpty()
+            return buildString {
+                appendLine(connection.url)
+                appendLine("Status: ${connection.status}${connection.statusDetail.takeIf { it.isNotBlank() }?.let { " · $it" }.orEmpty()}")
+                appendLine("Started: ${Date(connection.createdAtMs)}")
+                appendLine("Last activity: ${Date(connection.lastActivityAtMs)}")
+                appendLine("Frames: ${connection.frames.size} · Unread: ${connection.unreadFrameCount.get()}$directionLabel")
+                if (webSocketFilter.isNotBlank()) appendLine("Filter: $webSocketFilter")
+                appendLine("\nFrames (newest first):")
+                append(frames.mapIndexed { index, frame -> webSocketFrameRow(index + 1, frame) }
+                    .joinToString("\n\n").ifEmpty { "No matching frames. Use Send Frame to send text or base64:<data>." })
+            }
+        }
+
+        val matching = filteredWebSocketConnections()
+        val activeCount = webSocketConnections.count { it.isActive() }
+        return buildString {
+            appendLine("Connections: ${matching.size} · Active: $activeCount")
+            if (webSocketFilter.isNotBlank()) appendLine("Filter: $webSocketFilter · ${matching.size} matches")
+            append(matching.mapIndexed { index, item ->
+                val sent = item.frames.count { it.direction.equals("Sent", ignoreCase = true) }
+                val received = item.frames.size - sent
+                "#${index + 1} ${item.url}\n  ${item.status} · Sent $sent · Received $received · Unread ${item.unreadFrameCount.get()}" +
+                    item.statusDetail.takeIf { it.isNotBlank() }?.let { "\n  $it" }.orEmpty()
+            }.joinToString("\n\n").ifEmpty { "No WebSocket connections recorded. Install DebugSwiftWebSocketListener on the host OkHttp WebSocket listener." })
+        }
+    }
+
+    private fun webSocketFrameRow(index: Int, frame: WebSocketFrameRecord): String {
+        val preview = decodeWebSocketPayload(frame.payload)?.replace('\n', ' ')?.take(180)
+            ?: "<Binary Data: ${frame.payload.size} bytes>"
+        return "#$index ${frame.direction} · ${frame.type} · ${formatBytes(frame.payload.size.toLong())} · ${timestampAt(frame.timestampMs)}\n$preview"
+    }
+
+    private fun webSocketFrameSnapshot(connection: WebSocketConnectionRecord, frame: WebSocketFrameRecord): String {
+        return webSocketFrameSnapshot(connection, frame, forExport = false)
+    }
+
+    private fun webSocketFrameSnapshot(
+        connection: WebSocketConnectionRecord,
+        frame: WebSocketFrameRecord,
+        forExport: Boolean
+    ): String {
+        val decoded = decodeWebSocketPayload(frame.payload)
+        val rawPayload = if (forExport || decoded == null) decoded else decoded.take(64_000)
+        val pretty = rawPayload?.let(::prettyWebSocketPayload)
+        val hexLimit = if (forExport) frame.payload.size else minOf(frame.payload.size, 4096)
+        val hex = frame.payload.take(hexLimit).joinToString(" ") { "%02X".format(it.toInt() and 0xFF) }
+        return buildString {
+            appendLine(connection.url)
+            appendLine("Direction: ${frame.direction}")
+            appendLine("Timestamp: ${Date(frame.timestampMs)}")
+            appendLine("Type: ${frame.type}")
+            appendLine("Size: ${formatBytes(frame.payload.size.toLong())}")
+            appendLine("\nPretty / decoded payload")
+            appendLine(pretty ?: if (decoded == null) "<Binary data>" else "<Payload too large to format>")
+            if (!forExport && decoded != null && decoded.length > 64_000) appendLine("… payload preview truncated …")
+            appendLine("\nRaw payload")
+            appendLine(rawPayload ?: "<Binary data>")
+            if (!forExport && decoded != null && decoded.length > 64_000) appendLine("… payload preview truncated …")
+            appendLine("\nHex")
+            append(hex.ifBlank { "(empty)" })
+            if (!forExport && frame.payload.size > hexLimit) appendLine("\n… showing $hexLimit of ${frame.payload.size} bytes …")
+        }
+    }
+
+    private fun prettyWebSocketPayload(payload: String): String = runCatching {
+        when {
+            payload.trim().startsWith("{") -> JSONObject(payload).toString(2)
+            payload.trim().startsWith("[") -> JSONArray(payload).toString(2)
+            else -> payload
+        }
+    }.getOrDefault(payload)
+
+    private fun selectWebSocketConnection(value: String): String {
+        val index = value.trim().removePrefix("#").toIntOrNull()
+            ?: return "Enter a connection number from the current list."
+        val connection = filteredWebSocketConnections().getOrNull(index - 1)
+            ?: return "No WebSocket connection at position $index. Refresh the list; the newest activity is #1."
+        selectedWebSocketConnectionID = connection.id
+        selectedWebSocketFrameID = ""
+        webSocketDirectionFilter = ""
+        connection.unreadFrameCount.set(0)
+        return webSocketSnapshot()
+    }
+
+    private fun selectWebSocketFrame(value: String): String {
+        val connection = webSocketConnections.firstOrNull { it.id == selectedWebSocketConnectionID }
+            ?: return "Open a WebSocket connection first."
+        val index = value.trim().removePrefix("#").toIntOrNull()
+            ?: return "Enter a frame number from the current connection."
+        val frame = filteredWebSocketFrames(connection).getOrNull(index - 1)
+            ?: return "No WebSocket frame at position $index. Refresh the frame list; the newest frame is #1."
+        selectedWebSocketFrameID = frame.id
+        return webSocketSnapshot()
+    }
+
+    private fun closeSelectedWebSocketConnection(): String {
+        val connection = webSocketConnections.firstOrNull { it.id == selectedWebSocketConnectionID }
+            ?: return "Open a WebSocket connection first."
+        val socket = activeWebSockets[connection.id]
+            ?: return "Connection is already closed."
+        val accepted = runCatching { socket.close(1000, "Closed from DebugSwift") }.getOrDefault(false)
+        if (!accepted) return "The WebSocket client rejected the close request.\n\n${webSocketSnapshot()}"
+        connection.status = "Closing"
+        connection.statusDetail = "Close requested by DebugSwift"
+        recordWebSocketEvent(connection, "closing", connection.statusDetail)
+        selectedWebSocketFrameID = ""
+        return webSocketSnapshot()
+    }
+
+    private fun copyWebSocketURL(context: Context): String {
+        val connection = webSocketConnections.firstOrNull { it.id == selectedWebSocketConnectionID }
+            ?: return "Open a WebSocket connection first."
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+            ?: return "Clipboard service is not available."
+        clipboard.setPrimaryClip(ClipData.newPlainText("WebSocket URL", connection.url))
+        return "WebSocket URL copied to clipboard.\n\n${webSocketSnapshot()}"
+    }
+
+    private fun copyWebSocketPayload(context: Context): String {
+        val connection = webSocketConnections.firstOrNull { it.id == selectedWebSocketConnectionID }
+            ?: return "Open a WebSocket connection first."
+        val frame = connection.frames.firstOrNull { it.id == selectedWebSocketFrameID }
+            ?: return "Open a frame first."
+        val content = decodeWebSocketPayload(frame.payload)?.let(::prettyWebSocketPayload)
+            ?: frame.payload.joinToString(" ") { "%02X".format(it.toInt() and 0xFF) }
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+            ?: return "Clipboard service is not available."
+        clipboard.setPrimaryClip(ClipData.newPlainText("WebSocket payload", content))
+        return "Frame payload copied to clipboard.\n\n${webSocketFrameSnapshot(connection, frame)}"
+    }
+
+    private fun clearSelectedWebSocketFrames(): String {
+        val connection = webSocketConnections.firstOrNull { it.id == selectedWebSocketConnectionID }
+        if (connection == null) {
+            webSocketConnections.forEach { it.frames.clear(); it.unreadFrameCount.set(0) }
+        } else {
+            connection.frames.clear()
+            connection.unreadFrameCount.set(0)
+        }
+        selectedWebSocketFrameID = ""
+        recordWebSocketEvent(connection ?: WebSocketConnectionRecord("history", "all connections"), "frames cleared", "")
+        return webSocketSnapshot()
+    }
+
+    private fun sendWebSocketFrame(value: String, resendSelected: Boolean): String {
+        val connection = webSocketConnections.firstOrNull { it.id == selectedWebSocketConnectionID }
+            ?: return "Open a WebSocket connection first."
+        val socket = activeWebSockets[connection.id] ?: return "Connection is closed. Frames cannot be sent."
+        val frame = if (resendSelected) {
+            connection.frames.firstOrNull { it.id == selectedWebSocketFrameID }
+                ?: return "Select a frame to resend first."
+        } else null
+
+        val isBase64Payload = !resendSelected && value.startsWith("base64:", ignoreCase = true)
+        val payloadText = when {
+            frame?.type == "Binary" || isBase64Payload -> null
+            frame != null -> decodeWebSocketPayload(frame.payload)
+            else -> value
+        }
+        val payloadBytes = when {
+            frame != null -> frame.payload
+            value.startsWith("base64:", ignoreCase = true) -> runCatching {
+                android.util.Base64.decode(value.substringAfter(':'), android.util.Base64.DEFAULT)
+            }.getOrElse { return "Invalid base64 payload: ${it.message}" }
+            else -> value.toByteArray(StandardCharsets.UTF_8)
+        }
+        val sent = if (payloadText == null) {
+            runCatching { socket.send(okio.ByteString.of(*payloadBytes)) }.getOrDefault(false)
+        } else {
+            runCatching { socket.send(payloadText) }.getOrDefault(false)
+        }
+        if (!sent) return "The WebSocket client rejected the frame.\n\n${webSocketSnapshot()}"
+        recordWebSocketFrame(connection, "Sent", if (payloadText == null) "Binary" else "Text", payloadBytes)
+        selectedWebSocketFrameID = ""
+        return "Frame sent.\n\n${webSocketSnapshot()}"
+    }
+
+    private fun clearWebSocketHistory(): String {
+        webSocketConnections.clear()
+        webSocketRecords.clear()
+        legacyWebSocketIDs.clear()
+        selectedWebSocketConnectionID = ""
+        selectedWebSocketFrameID = ""
+        webSocketFilter = ""
+        webSocketDirectionFilter = ""
+        events.removeAll { it.contains("WebSocket") }
+        publishEvent("network", "WebSocket history cleared")
+        return "WebSocket connections and frames cleared."
     }
 
     private fun selectNetworkRequest(featureID: String, value: String): String {
@@ -1224,17 +1674,13 @@ object AndroidDebugTools {
                 return "WebView history cleared."
             }
             "websocket" -> {
-                webSocketRecords.clear()
-                events.removeAll { it.contains("WebSocket") }
-                publishEvent("network", "WebSocket history cleared")
-                return "WebSocket history cleared."
+                return clearWebSocketHistory()
             }
             "network_history", "har_export" -> {
                 networkRecords.clear()
-                webSocketRecords.clear()
+                clearWebSocketHistory()
                 networkFilter = ""
                 synchronized(this) { thresholdCount = 0; thresholdStartMs = SystemClock.elapsedRealtime() }
-                events.removeAll { it.contains("WebSocket") }
                 persistNetworkHistory()
                 publishEvent("network", "Network history cleared")
                 return "Network and WebSocket history cleared."
@@ -2701,6 +3147,8 @@ object AndroidDebugTools {
     }
 
     private fun timestamp(): String = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()).format(Date())
+
+    private fun timestampAt(timestampMs: Long): String = SimpleDateFormat("HH:mm:ss.SSS", Locale.getDefault()).format(Date(timestampMs))
 
     private fun priorityName(priority: Int): String = when (priority) {
         Log.ERROR -> "ERROR"

@@ -33,7 +33,7 @@ class App : Application() {
 }
 ```
 
-Add `DebugSwiftOkHttpInterceptor()` to each OkHttp client whose traffic should be captured. Wrap WebSocket listeners with `DebugSwiftWebSocketListener(url, listener)`; route outgoing frames through its `sendText` and `sendBinary` helpers as well. Install `DebugSwiftWebViewClient` on host WebViews. Android cannot intercept every networking stack globally, so clients using a different stack need an equivalent integration hook.
+Add `DebugSwiftOkHttpInterceptor()` to each OkHttp client whose traffic should be captured. Wrap WebSocket listeners with `DebugSwiftWebSocketListener(url, listener)`. The delegate receives an instrumented `WebSocket`, so ordinary outgoing `send` calls are captured; the listener's `sendText` and `sendBinary` helpers are available when code still holds the raw socket. Install `DebugSwiftWebViewClient` on host WebViews. Android cannot intercept every networking stack globally, so clients using a different stack need an equivalent integration hook.
 
 The runtime also exposes host hooks for custom actions and diagnostic values (`registerAction`, `registerInfo`), FCM tokens (`reportPushToken`), location (`reportLocation`), Room databases, and Realm projections (`DebugSwiftRealmRegistry.register`). Forward Activity touch events to `AndroidDebugTools.recordTouch(event)` and wrap a Compose subtree in `DebugSwiftComposeProbe` to collect those interface diagnostics.
 

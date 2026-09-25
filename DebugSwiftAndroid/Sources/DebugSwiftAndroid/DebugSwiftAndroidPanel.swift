@@ -523,7 +523,9 @@ struct DebugSwiftFeatureDetail: View {
         switch feature.id {
         case "http":
             ["refresh", "filter_requests", "select_request", "clear", "export"]
-        case "websocket", "har_export", "console", "crashes", "backtraces", "event_bus":
+        case "websocket":
+            ["refresh", "filter_websockets", "select_connection", "select_frame", "filter_sent", "filter_received", "filter_all_frames", "copy_url", "copy_payload", "send_frame", "resend_frame", "close_connection", "clear_frames", "back_connections", "clear", "export"]
+        case "har_export", "console", "crashes", "backtraces", "event_bus":
             ["refresh", "capture", "clear", "export"]
         case "oslog_console":
             ["refresh", "filter_logs", "export"]
@@ -577,6 +579,7 @@ struct DebugSwiftFeatureDetail: View {
     var inputHint: String? {
         switch feature.id {
         case "http", "graphql", "network_history": "Filter by URL, method, or body; enter a list number for details"
+        case "websocket": "Filter URL/payload; enter #connection, #frame, text, or base64:<data>"
         case "oslog_console": "Filter log message or tag"
         case "network_injection": "Value: ms, status, pattern=>body, or URL pattern"
         case "network_thresholds": "Request limit,window seconds"
@@ -600,6 +603,19 @@ struct DebugSwiftFeatureDetail: View {
         case "export": "Export"
         case "filter_requests": "Apply filter"
         case "select_request": "Open request details"
+        case "filter_websockets": "Filter connections and frames"
+        case "select_connection": "Open connection"
+        case "select_frame": "Open frame details"
+        case "filter_sent": "Show sent frames"
+        case "filter_received": "Show received frames"
+        case "filter_all_frames": "Show all frames"
+        case "copy_url": "Copy connection URL"
+        case "copy_payload": "Copy selected payload"
+        case "send_frame": "Send text or binary frame"
+        case "resend_frame": "Resend selected frame"
+        case "close_connection": "Close connection"
+        case "clear_frames": "Clear selected connection frames"
+        case "back_connections": "Back to connections"
         case "filter_logs": "Apply log filter"
         case "toggle": feature.id == "network_thresholds" ? "Toggle request blocking" : feature.id == "agent_debug_log" ? "Start / stop capture" : feature.id == "dark_mode" ? "Toggle dark appearance" : feature.id == "push_simulator" ? "Enable / disable simulation" : "Enable / disable"
         case "reset_dark_mode": "Follow system appearance"
