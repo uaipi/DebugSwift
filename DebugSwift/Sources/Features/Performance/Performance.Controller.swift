@@ -11,6 +11,53 @@ import UIKit
 final class PerformanceViewController: BaseTableController, PerformanceToolkitDelegate, MainFeatureType {
     var controllerType: DebugSwiftFeature { .performance }
 
+    enum Scope: Equatable {
+        case all
+        case overview
+        case widget
+        case memoryWarning
+        case frameDrops
+        case hangs
+        case backtraces
+        case leaks
+
+        var sections: [Section] {
+            switch self {
+            case .all:
+                Section.allCases
+            case .overview:
+                [.cpu, .memory]
+            case .widget:
+                [.widget]
+            case .memoryWarning:
+                [.memory]
+            case .frameDrops:
+                [.frameDrops]
+            case .hangs:
+                [.hangDetection]
+            case .backtraces:
+                [.backtrace]
+            case .leaks:
+                [.leaks]
+            }
+        }
+
+        var title: String {
+            switch self {
+            case .all: "Performance"
+            case .overview: "Live Metrics"
+            case .widget: "Performance Widget"
+            case .memoryWarning: "Memory Warning"
+            case .frameDrops: "Frame Drops"
+            case .hangs: "Hang Detection"
+            case .backtraces: "Backtraces"
+            case .leaks: "Leak Detection"
+            }
+        }
+    }
+
+    private let scope: Scope
+
     lazy var performanceToolkit = PerformanceToolkit(widgetDelegate: self)
     private let memoryWarningSimulator = PerformanceMemoryWarning()
     private let ioMonitor = DiskIOMonitor.shared
@@ -68,7 +115,7 @@ final class PerformanceViewController: BaseTableController, PerformanceToolkitDe
         }
     }
 
-    private enum Section: Int, CaseIterable {
+    enum Section: Int, CaseIterable {
         case widget
         case cpu
         case memory
@@ -89,7 +136,18 @@ final class PerformanceViewController: BaseTableController, PerformanceToolkitDe
     // MARK: - UIViewController Lifecycle
 
     override init() {
+        scope = .all
         super.init()
+        initializeController()
+    }
+
+    init(scope: Scope) {
+        self.scope = scope
+        super.init()
+        initializeController()
+    }
+
+    private func initializeController() {
         performanceToolkit.delegate = self
         setup()
     }
@@ -107,7 +165,7 @@ final class PerformanceViewController: BaseTableController, PerformanceToolkitDe
     // MARK: - Setup Methods
 
     private func setup() {
-        title = "Performance"
+        title = scope.title
         tabBarItem = UITabBarItem(
             title: title,
             image: .named("speedometer"),
@@ -132,17 +190,18 @@ final class PerformanceViewController: BaseTableController, PerformanceToolkitDe
     // MARK: - UITableViewDataSource
 
     override func numberOfSections(in _: UITableView) -> Int {
-        Section.allCases.count
+        scope.sections.count
     }
 
     override func tableView(_: UITableView, numberOfRowsInSection section: Int) -> Int {
-        switch Section(rawValue: section)! {
+        guard let section = scope.sections[safe: section] else { return 0 }
+        switch section {
         case .widget:
             return 1
         case .cpu:
             return 1
         case .memory:
-            return 2
+            return scope == .memoryWarning || scope == .overview ? 1 : 2
 
         case .leaks:
             if DebugSwift.App.shared.disableMethods.contains(.leaksDetector) { return 0 }
@@ -177,10 +236,11 @@ final class PerformanceViewController: BaseTableController, PerformanceToolkitDe
     }
 
     override func tableView(_: UITableView, titleForHeaderInSection section: Int) -> String? {
-        switch Section(rawValue: section)! {
+        guard let section = scope.sections[safe: section] else { return nil }
+        switch section {
         case .widget: return nil
         case .cpu: return nil
-        case .memory: return nil
+        case .memory: return scope == .memoryWarning ? "Memory Warning" : nil
         case .leaks:
             if DebugSwift.App.shared.disableMethods.contains(.leaksDetector) { return nil }
             return "Leaks & Threads"
@@ -201,7 +261,8 @@ final class PerformanceViewController: BaseTableController, PerformanceToolkitDe
     }
 
     override func tableView(_: UITableView, titleForFooterInSection section: Int) -> String? {
-        switch Section(rawValue: section)! {
+        guard let section = scope.sections[safe: section] else { return nil }
+        switch section {
         case .frameDrops:
             return isFrameDropMonitoringEnabled
                 ? "Recording frame drops below \(Int(FrameDropAdapter.shared.timeline.dropThreshold)) fps. Tap View Timeline to inspect events."
@@ -216,13 +277,14 @@ final class PerformanceViewController: BaseTableController, PerformanceToolkitDe
     }
 
     override func tableView(_ tableView: UITableView, cellForRowAt indexPath: IndexPath) -> UITableViewCell {
-        switch Section(rawValue: indexPath.section)! {
+        guard let section = scope.sections[safe: indexPath.section] else { return UITableViewCell() }
+        switch section {
         case .widget:
             return widgetToggleCell()
         case .cpu:
             return cpuCell(at: indexPath.row)
         case .memory:
-            return memoryCell(at: indexPath.row)
+            return scope == .memoryWarning ? memoryWarningCell() : memoryCell(at: indexPath.row)
         case .leaks:
             return leaksCell(at: indexPath.row)
         case .superCall:
@@ -310,10 +372,9 @@ final class PerformanceViewController: BaseTableController, PerformanceToolkitDe
             } else {
                 // Capture Now — perform immediate capture and refresh
                 _ = DebugSwift.Performance.Backtrace.capture(label: "Manual Capture")
-                tableView.reloadSections(
-                    IndexSet(integer: Section.backtrace.rawValue),
-                    with: .none
-                )
+                if let sectionIndex = scope.sections.firstIndex(of: .backtrace) {
+                    tableView.reloadSections(IndexSet(integer: sectionIndex), with: .none)
+                }
             }
         default:
             break

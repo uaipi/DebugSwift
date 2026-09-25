@@ -288,4 +288,62 @@ public extension DebugSwift {
         navigationController.overrideUserInterfaceStyle = .dark
         return navigationController
     }
+
+    /// The performance tools exposed in the shared SwiftUI feature list.
+    @MainActor
+    static func availablePerformanceFeatureIDs() -> [String] {
+        var featureIDs = [
+            "performance_overview", "performance_widget", "battery", "disk",
+            "memory_warning", "frame_drops", "hangs", "backtraces", "leaks",
+            "thread_checker", "super_calls"
+        ]
+        let disabledMethods = App.shared.disableMethods
+        if disabledMethods.contains(.leaksDetector) {
+            featureIDs.removeAll { $0 == "leaks" }
+        }
+        if disabledMethods.contains(.superCallDetector) {
+            featureIDs.removeAll { $0 == "super_calls" }
+        }
+        return featureIDs
+    }
+
+    /// Builds the existing UIKit implementation for one performance tool.
+    @MainActor
+    static func debugPerformanceViewController(for featureID: String) -> UIViewController? {
+        let rootController: UIViewController
+        switch featureID {
+        case "performance_overview":
+            rootController = PerformanceViewController(scope: .overview)
+        case "performance_widget":
+            rootController = PerformanceViewController(scope: .widget)
+        case "battery":
+            rootController = BatteryDebugController()
+        case "disk":
+            rootController = DiskDebugController()
+        case "memory_warning":
+            rootController = PerformanceViewController(scope: .memoryWarning)
+        case "frame_drops":
+            rootController = PerformanceViewController(scope: .frameDrops)
+        case "hangs":
+            rootController = PerformanceViewController(scope: .hangs)
+        case "backtraces":
+            rootController = PerformanceViewController(scope: .backtraces)
+        case "leaks":
+            rootController = PerformanceViewController(scope: .leaks)
+        case "thread_checker":
+            rootController = PerformanceThreadCheckerViewController()
+        case "super_calls":
+            rootController = ResourcesGenericController(viewModel: SuperCallViolationsViewModel())
+        default:
+            return nil
+        }
+
+        rootController.navigationItem.largeTitleDisplayMode = .never
+        let navigationController = UINavigationController(rootViewController: rootController)
+        navigationController.navigationBar.prefersLargeTitles = false
+        navigationController.navigationBar.tintColor = .white
+        navigationController.view.backgroundColor = .black
+        navigationController.overrideUserInterfaceStyle = .dark
+        return navigationController
+    }
 }

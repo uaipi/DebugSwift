@@ -46,29 +46,19 @@ private struct DebugSwiftAndroidPanelContent: View {
                 .padding(.vertical, 10)
             }
 
-            #if os(iOS)
-            if selectedArea == .network || selectedArea == .interface || selectedArea == .resources || selectedArea == .app {
-                NavigationStack {
-                    DebugSwiftFeatureList(area: selectedArea)
-                        .navigationTitle(selectedArea.title)
-                }
-                .id(selectedArea.id)
-                .frame(maxWidth: .infinity, maxHeight: .infinity)
-            } else {
-                DebugSwiftIOSFeatureHost(area: selectedArea)
-                    .id(selectedArea.id)
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-            }
-            #else
             NavigationStack {
                 DebugSwiftFeatureList(area: selectedArea)
                     .navigationTitle(selectedArea.title)
             }
             .id(selectedArea.id)
             .frame(maxWidth: .infinity, maxHeight: .infinity)
-            #endif
         }
         .preferredColorScheme(ColorScheme.dark)
+        .onAppear {
+            if !visibleAreas.contains(selectedArea), let firstVisibleArea = visibleAreas.first {
+                selectedArea = firstVisibleArea
+            }
+        }
     }
 
     var visibleAreas: [DebugSwiftArea] {
@@ -132,19 +122,25 @@ enum DebugSwiftArea: String, CaseIterable, Identifiable, Hashable {
             return features
             #endif
         case .performance:
-            return [
+            let features: [DebugSwiftTool] = [
                 .init("performance_overview", "Live Metrics", "Track CPU, memory, frames per second, and process activity."),
                 .init("performance_widget", "Performance Widget", "Show live CPU, memory, and slow-frame metrics over the host app."),
                 .init("battery", "Battery", "Inspect battery level, charging state, and power source."),
                 .init("disk", "Disk I/O", "Inspect app storage size and process read/write byte counters."),
-                .init("memory_warning", "Memory Warning", "Send low-memory callbacks to the Android Application and foreground Activity."),
+                .init("memory_warning", "Memory Warning", "Trigger the platform's low-memory callback path and inspect its response."),
                 .init("frame_drops", "Frame Drops", "Record slow frames and inspect their timing on a timeline."),
                 .init("hangs", "Hangs and ANRs", "Detect main thread stalls and inspect captured stack traces."),
                 .init("backtraces", "Backtraces", "Capture and browse call stacks on demand."),
-                .init("leaks", "Leak Detection", "Find destroyed Android Activities that remain reachable after a grace period."),
-                .init("thread_checker", "Thread Checker", "Capture Android StrictMode thread and VM violations."),
+                .init("leaks", "Leak Detection", "Find UI objects that remain reachable after their expected lifetime."),
+                .init("thread_checker", "Thread Checker", "Capture thread violations, inspect details, and configure dispatch handling."),
                 .init("super_calls", "Lifecycle Super Calls", "Review lifecycle callback violations reported by the platform.")
             ]
+            #if os(iOS)
+            let availableIDs = Set(DebugSwift.availablePerformanceFeatureIDs())
+            return features.filter { availableIDs.contains($0.id) }
+            #else
+            return features
+            #endif
         case .interface:
             #if os(iOS)
             let availableIDs = Set(DebugSwift.availableInterfaceFeatureIDs())
@@ -271,6 +267,9 @@ private struct DebugSwiftFeatureDestination: View {
             DebugSwiftGridOverlaySettingsView()
         } else if ["http", "websocket", "network_injection", "network_thresholds", "graphql", "network_encryption", "har_export", "webview_network", "network_history"].contains(feature.id) {
             DebugSwiftIOSNativeNetworkHost(featureID: feature.id)
+                .ignoresSafeArea(edges: .bottom)
+        } else if ["performance_overview", "performance_widget", "battery", "disk", "memory_warning", "frame_drops", "hangs", "backtraces", "leaks", "thread_checker", "super_calls"].contains(feature.id) {
+            DebugSwiftIOSNativePerformanceHost(featureID: feature.id)
                 .ignoresSafeArea(edges: .bottom)
         } else if ["touches", "colorize", "animations", "dark_mode", "measurement"].contains(feature.id) {
             DebugSwiftInterfaceSettingView(featureID: feature.id)
@@ -459,6 +458,17 @@ private struct DebugSwiftIOSNativeNetworkHost: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> UIViewController {
         DebugSwiftAndroidRuntime.prepareIOSDebugger()
         return DebugSwift.debugNetworkViewController(for: featureID) ?? UIViewController()
+    }
+
+    func updateUIViewController(_ viewController: UIViewController, context: Context) {}
+}
+
+private struct DebugSwiftIOSNativePerformanceHost: UIViewControllerRepresentable {
+    let featureID: String
+
+    func makeUIViewController(context: Context) -> UIViewController {
+        DebugSwiftAndroidRuntime.prepareIOSDebugger()
+        return DebugSwift.debugPerformanceViewController(for: featureID) ?? UIViewController()
     }
 
     func updateUIViewController(_ viewController: UIViewController, context: Context) {}
@@ -746,17 +756,3 @@ public enum DebugSwiftAndroidRuntime {
     }
     #endif
 }
-
-#if os(iOS)
-private struct DebugSwiftIOSFeatureHost: UIViewControllerRepresentable {
-    let area: DebugSwiftArea
-
-    func makeUIViewController(context: Context) -> UIViewController {
-        DebugSwiftAndroidRuntime.prepareIOSDebugger()
-        let feature = DebugSwiftFeature(rawValue: area.id) ?? .network
-        return DebugSwift.debugFeatureViewController(for: feature)
-    }
-
-    func updateUIViewController(_ uiViewController: UIViewController, context: Context) {}
-}
-#endif

@@ -1,6 +1,6 @@
 # DebugSwift Android sample
 
-This sample consumes the `DebugSwiftAndroid` product from the main DebugSwift package and renders its SwiftUI panel as native Android Compose UI. The same category navigation runs on iOS; existing feature screens stay in UIKit behind one `UIViewControllerRepresentable` per category while they are migrated to shared SwiftUI.
+This sample consumes the `DebugSwiftAndroid` product from the main DebugSwift package and renders its SwiftUI panel as native Android Compose UI. iOS and Android share the category navigation and feature catalogues. SwiftUI-compatible settings run on both platforms; iOS inspectors that still depend on UIKit stay native behind one `UIViewControllerRepresentable` per feature.
 
 ## Build the sample
 
@@ -65,6 +65,6 @@ Use `DebugSwiftAndroidRuntime.log("message")` or `AndroidDebugTools.log("message
 
 ## Platform equivalents
 
-The debugger category navigation and feature catalogues are shared SwiftUI on iOS and Android. Skip Lite turns those views into Compose on Android. iOS Network, Interface, Resources, and App tools keep existing UIKit inspectors behind feature-sized representables; Performance remains on its existing iOS category controller while its Android tools use the shared catalogue. Android uses Kotlin platform implementations for lifecycle, performance, storage, notifications, and Compose diagnostics.
+The debugger category navigation and feature catalogues are shared SwiftUI on iOS and Android. Skip Lite turns those views into Compose on Android. iOS tools with existing UIKit inspectors keep those details behind feature-sized representables, including Network, Performance, Resources, and App inspectors; compatible settings remain shared SwiftUI. Android uses Kotlin platform implementations for lifecycle, performance, storage, notifications, and Compose diagnostics.
 
 Android Room/SQLite is the storage equivalent for Core Data and SwiftData. Android Keystore aliases replace Keychain inspection; secret key material remains non-exportable. Some platform data, such as a push token or a Realm schema projection, must be supplied by the host app through the hooks above. Network capture also requires the host networking integration described above.
