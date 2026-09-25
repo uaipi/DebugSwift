@@ -47,9 +47,17 @@ private struct DebugSwiftAndroidPanelContent: View {
             }
 
             #if os(iOS)
-            DebugSwiftIOSFeatureHost(area: selectedArea)
-                .id(selectedArea.id)
+            if selectedArea == .interface {
+                NavigationStack {
+                    DebugSwiftFeatureList(area: selectedArea)
+                        .navigationTitle(selectedArea.title)
+                }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
+            } else {
+                DebugSwiftIOSFeatureHost(area: selectedArea)
+                    .id(selectedArea.id)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+            }
             #else
             NavigationStack {
                 DebugSwiftFeatureList(area: selectedArea)
@@ -101,10 +109,11 @@ enum DebugSwiftArea: String, CaseIterable, Identifiable, Hashable {
         }
     }
 
+    @MainActor
     var features: [DebugSwiftTool] {
         switch self {
         case .network:
-            [
+            return [
                 .init("http", "HTTP Inspector", "Capture requests and responses, inspect bodies, filter traffic, and export request history."),
                 .init("websocket", "WebSocket Inspector", "Inspect WebSocket connections, sent frames, and received frames."),
                 .init("network_injection", "Network Injection", "Add request delay, failure, HTTP errors, and response body rewrite rules."),
@@ -116,7 +125,7 @@ enum DebugSwiftArea: String, CaseIterable, Identifiable, Hashable {
                 .init("network_history", "Session History", "Search saved network sessions and export or clear their request history.")
             ]
         case .performance:
-            [
+            return [
                 .init("performance_overview", "Live Metrics", "Track CPU, memory, frames per second, and process activity."),
                 .init("performance_widget", "Performance Widget", "Show live CPU, memory, and slow-frame metrics over the host app."),
                 .init("battery", "Battery", "Inspect battery level, charging state, and power source."),
@@ -129,7 +138,21 @@ enum DebugSwiftArea: String, CaseIterable, Identifiable, Hashable {
                 .init("super_calls", "Lifecycle Super Calls", "Review lifecycle callback violations reported by the platform.")
             ]
         case .interface:
-            [
+            #if os(iOS)
+            let availableIDs = Set(DebugSwift.availableInterfaceFeatureIDs())
+            return [
+                .init("touches", "Showing touches", "Show touch feedback in the active app window."),
+                .init("grid", "Grid overlay", "Draw a configurable alignment grid over the active app window."),
+                .init("colorize", "Colorized view borders", "Colorize native view borders to help identify layout boundaries."),
+                .init("animations", "Slow animations", "Slow app animations to inspect transitions and motion."),
+                .init("dark_mode", "Dark Mode", "Override the active app window appearance."),
+                .init("measurement", "UI measurements", "Show element positions, sizes, and spacing."),
+                .init("swiftui_render", "SwiftUI render tracking", "Track SwiftUI rendering activity."),
+                .init("doc_recorder", "Documentation Recorder", "Capture and annotate interactions for documentation."),
+                .init("color_palette", "Color palette extractor", "Sample and export colors from the active screen.")
+            ].filter { availableIDs.contains($0.id) }
+            #else
+            return [
                 .init("view_hierarchy", "View Hierarchy", "Inspect the active Android view tree and its measured bounds."),
                 .init("grid", "Grid Overlay", "Draw a configurable alignment grid over the current app window."),
                 .init("touches", "Touch Indicators", "Record touch locations and show visual feedback during interactions."),
@@ -140,8 +163,9 @@ enum DebugSwiftArea: String, CaseIterable, Identifiable, Hashable {
                 .init("measurement", "Measurement Tool", "Inspect element positions, sizes, and spacing in the active window."),
                 .init("color_palette", "Color Palette", "Sample colors from a captured screen image and export the palette.")
             ]
+            #endif
         case .resources:
-            [
+            return [
                 .init("files", "File Browser", "Browse the app sandbox, databases, cache, and exported files."),
                 .init("preferences", "Preferences", "View and update registered Android SharedPreferences values."),
                 .init("keychain", "Secure Storage", "Inspect aliases in Android Keystore without exposing private key material."),
@@ -153,7 +177,7 @@ enum DebugSwiftArea: String, CaseIterable, Identifiable, Hashable {
                 .init("security_audit", "Security Audit", "Find sensitive-looking keys in registered preferences and app-private text files.")
             ]
         case .app:
-            [
+            return [
                 .init("crashes", "Crash Reports", "Save uncaught application crashes with stack traces and timestamps."),
                 .init("console", "Console", "View, clear, and export messages written through the DebugSwift logger."),
                 .init("device_info", "Device Info", "Inspect app version, Android version, device, display, and memory details."),
@@ -189,7 +213,7 @@ struct DebugSwiftFeatureList: View {
     var body: some View {
         List(area.features) { feature in
             NavigationLink {
-                DebugSwiftFeatureDetail(feature: feature)
+                DebugSwiftFeatureDestination(feature: feature)
                     .navigationTitle(feature.title)
             } label: {
                 VStack(alignment: HorizontalAlignment.leading, spacing: 5) {
@@ -204,6 +228,159 @@ struct DebugSwiftFeatureList: View {
         }
     }
 }
+
+private struct DebugSwiftFeatureDestination: View {
+    let feature: DebugSwiftTool
+
+    @ViewBuilder
+    var body: some View {
+        #if os(iOS)
+        if feature.id == "grid" {
+            DebugSwiftGridOverlaySettingsView()
+        } else if ["touches", "colorize", "animations", "dark_mode", "measurement"].contains(feature.id) {
+            DebugSwiftInterfaceSettingView(featureID: feature.id)
+        } else if ["swiftui_render", "doc_recorder", "color_palette"].contains(feature.id) {
+            DebugSwiftIOSNativeInterfaceHost(featureID: feature.id)
+                .ignoresSafeArea(edges: .bottom)
+        } else {
+            DebugSwiftFeatureDetail(feature: feature)
+        }
+        #else
+        if feature.id == "grid" {
+            DebugSwiftGridOverlaySettingsView()
+        } else {
+            DebugSwiftFeatureDetail(feature: feature)
+        }
+        #endif
+    }
+}
+
+private struct DebugSwiftGridOverlaySettingsView: View {
+    @State private var settings = DebugSwiftGridOverlayState()
+
+    private let colorNames = ["Red", "Blue", "Green", "Yellow", "White", "Gray"]
+    private let colors: [Color] = [.red, .blue, .green, .yellow, .white, .gray]
+
+    var body: some View {
+        Form {
+            Section("Overlay") {
+                Toggle("Show grid overlay", isOn: Binding(
+                    get: { settings.isEnabled },
+                    set: { value in update { $0.isEnabled = value } }
+                ))
+            }
+
+            if settings.isEnabled {
+                Section("Settings") {
+                    VStack(alignment: .leading, spacing: 8) {
+                        Slider(value: Binding(
+                            get: { settings.size },
+                            set: { value in update { $0.size = value } }
+                        ), in: 4.0...64.0, step: 1.0)
+                        Text("Size: \(Int(settings.size.rounded())) dp")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+
+                    VStack(alignment: .leading, spacing: 8) {
+                        Slider(value: Binding(
+                            get: { settings.opacity },
+                            set: { value in update { $0.opacity = value } }
+                        ), in: 0.1...1.0)
+                        Text("Opacity: \(Int((settings.opacity * 100).rounded()))%")
+                            .font(.caption)
+                            .foregroundColor(.secondary)
+                    }
+                }
+
+                Section("Color") {
+                    HStack(spacing: 14) {
+                        ForEach(0..<colors.count, id: \.self) { index in
+                            Button {
+                                update { $0.colorIndex = index }
+                            } label: {
+                                Circle()
+                                    .fill(colors[index])
+                                    .frame(width: 34, height: 34)
+                                    .overlay(Circle().stroke(Color.primary.opacity(0.6), lineWidth: settings.colorIndex == index ? 2.0 : 0.0))
+                                    .overlay {
+                                        if settings.colorIndex == index {
+                                            Image(systemName: "checkmark")
+                                                .font(.caption.bold())
+                                                .foregroundColor(index == 4 ? .black : .white)
+                                        }
+                                    }
+                            }
+                            .buttonStyle(.plain)
+                            .accessibilityLabel(colorNames[index])
+                        }
+                    }
+                    .padding(.vertical, 6)
+                }
+            }
+        }
+        .navigationTitle("Grid overlay")
+        .onAppear { settings = DebugSwiftAndroidRuntime.gridOverlaySettings() }
+    }
+
+    private func update(_ change: (inout DebugSwiftGridOverlayState) -> Void) {
+        var updated = settings
+        change(&updated)
+        settings = updated
+        _ = DebugSwiftAndroidRuntime.setGridOverlaySettings(updated)
+    }
+}
+
+private struct DebugSwiftInterfaceSettingView: View {
+    let featureID: String
+    @State private var isEnabled = false
+
+    private var title: String {
+        switch featureID {
+        case "touches": "Showing touches"
+        case "colorize": "Colorized view borders"
+        case "animations": "Slow animations"
+        case "dark_mode": "Dark Mode"
+        case "measurement": "UI measurements"
+        default: "Interface setting"
+        }
+    }
+
+    var body: some View {
+        Form {
+            Section {
+                Toggle(title, isOn: Binding(
+                    get: { isEnabled },
+                    set: { enabled in
+                        isEnabled = enabled
+                        DebugSwiftAndroidRuntime.setInterfaceSetting(featureID: featureID, enabled: enabled)
+                    }
+                ))
+            }
+        }
+        .onAppear { isEnabled = DebugSwiftAndroidRuntime.interfaceSettingIsEnabled(featureID: featureID) }
+    }
+}
+
+struct DebugSwiftGridOverlayState {
+    var isEnabled = false
+    var size = 28.0
+    var opacity = 0.5
+    var colorIndex = 0
+}
+
+#if os(iOS)
+private struct DebugSwiftIOSNativeInterfaceHost: UIViewControllerRepresentable {
+    let featureID: String
+
+    func makeUIViewController(context: Context) -> UIViewController {
+        DebugSwiftAndroidRuntime.prepareIOSDebugger()
+        return DebugSwift.debugInterfaceViewController(for: featureID) ?? UIViewController()
+    }
+
+    func updateUIViewController(_ viewController: UIViewController, context: Context) {}
+}
+#endif
 
 struct DebugSwiftFeatureDetail: View {
     let feature: DebugSwiftTool
@@ -239,11 +416,6 @@ struct DebugSwiftFeatureDetail: View {
                     .background(Color.secondary.opacity(0.12))
                     .clipShape(RoundedRectangle(cornerRadius: 10))
 
-                #if os(iOS)
-                Text("The original UIKit debugger is available from the bug icon in the tab bar.")
-                    .font(Font.caption)
-                    .foregroundColor(Color.secondary)
-                #endif
             }
             .padding()
         }
@@ -381,6 +553,87 @@ public enum DebugSwiftAndroidRuntime {
         return "Open the UIKit debugger on iOS to run this tool."
         #endif
     }
+
+    @MainActor
+    static func gridOverlaySettings() -> DebugSwiftGridOverlayState {
+        #if os(Android)
+        let parts = DebugSwiftNativeBridge.gridSettings().components(separatedBy: "|")
+        guard parts.count == 4 else { return DebugSwiftGridOverlayState() }
+        return DebugSwiftGridOverlayState(
+            isEnabled: parts[0] == "true",
+            size: Double(parts[1]) ?? 28.0,
+            opacity: Double(parts[2]) ?? 0.5,
+            colorIndex: Int(parts[3]) ?? 0
+        )
+        #else
+        let settings = DebugSwift.gridOverlaySettings()
+        return DebugSwiftGridOverlayState(
+            isEnabled: settings.isEnabled,
+            size: settings.size,
+            opacity: settings.opacity,
+            colorIndex: settings.colorIndex
+        )
+        #endif
+    }
+
+    @MainActor
+    @discardableResult
+    static func setGridOverlaySettings(_ settings: DebugSwiftGridOverlayState) -> String {
+        #if os(Android)
+        return DebugSwiftNativeBridge.setGridSettings(
+            "\(settings.isEnabled)|\(settings.size)|\(settings.opacity)|\(settings.colorIndex)"
+        )
+        #else
+        DebugSwift.setGridOverlaySettings(
+            DebugSwiftGridOverlaySettings(
+                isEnabled: settings.isEnabled,
+                size: settings.size,
+                opacity: settings.opacity,
+                colorIndex: settings.colorIndex
+            )
+        )
+        return "Grid settings updated."
+        #endif
+    }
+
+    @MainActor
+    static func interfaceSettingIsEnabled(featureID: String) -> Bool {
+        #if os(Android)
+        return DebugSwiftNativeBridge.interfaceToolEnabled(featureID)
+        #else
+        guard let setting = iosInterfaceSetting(for: featureID) else { return false }
+        return DebugSwift.interfaceSettingIsEnabled(setting)
+        #endif
+    }
+
+    @MainActor
+    @discardableResult
+    static func setInterfaceSetting(featureID: String, enabled: Bool) -> String {
+        #if os(Android)
+        return DebugSwiftNativeBridge.setInterfaceToolEnabled(featureID, enabled)
+        #else
+        guard let setting = iosInterfaceSetting(for: featureID) else {
+            return "Unknown interface setting: \(featureID)"
+        }
+        DebugSwift.setInterfaceSetting(setting, enabled: enabled)
+        return "\(featureID) \(enabled ? "enabled" : "disabled")."
+        #endif
+    }
+
+    #if os(iOS)
+    @MainActor
+    private static func iosInterfaceSetting(for featureID: String) -> DebugSwiftInterfaceSetting? {
+        switch featureID {
+        case "touches": .touches
+        case "colorize": .colorizedBorders
+        case "animations": .slowAnimations
+        case "dark_mode": .darkMode
+        case "measurement": .measurement
+        case "swiftui_render": .swiftUIRenderTracking
+        default: nil
+        }
+    }
+    #endif
 }
 
 #if os(iOS)

@@ -48,6 +48,7 @@ import kotlin.math.PI
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.sin
+import kotlin.math.roundToInt
 
 /** Android implementations for platform services that have no UIKit equivalent. */
 object AndroidDebugTools {
@@ -89,8 +90,11 @@ object AndroidDebugTools {
     private var debugOverlay: DebugOverlay? = null
     @Volatile private var activeTouchStart: Pair<Float, Float>? = null
     @Volatile private var currentFilePath = "files"
-    @Volatile private var gridSpacingDp = 20f
-    @Volatile private var gridColor = Color.argb(55, 60, 170, 255)
+    private val gridColors = listOf(Color.RED, Color.BLUE, Color.GREEN, Color.YELLOW, Color.WHITE, Color.GRAY)
+    @Volatile private var gridSpacingDp = 28f
+    @Volatile private var gridOpacity = 0.5f
+    @Volatile private var gridColorIndex = 0
+    @Volatile private var gridColor = gridColors[0]
     private var lastLocation = "No location has been reported by the host app."
     private var pushToken = "No FCM token has been reported by the host app."
     private var thresholdLimit = 0
@@ -292,6 +296,56 @@ object AndroidDebugTools {
         debugOverlay?.postInvalidate()
         publishEvent("interface", "Grid set to ${gridSpacingDp}dp")
         return "Grid spacing set to ${gridSpacingDp}dp" + (color?.let { " with #${"%08X".format(it)}." } ?: ".")
+    }
+
+    fun gridSettings(): String {
+        val enabled = synchronized(enabledTools) { "grid" in enabledTools }
+        return "$enabled|$gridSpacingDp|$gridOpacity|$gridColorIndex"
+    }
+
+    fun setGridSettings(value: String): String {
+        val parts = value.split("|")
+        if (parts.size != 4) return "Expected enabled|size|opacity|colorIndex."
+        val isEnabled = parts[0].toBooleanStrictOrNull()
+            ?: return "Grid enabled value must be true or false."
+        val spacing = parts[1].toFloatOrNull()
+            ?: return "Grid size must be a number from 4 to 64 dp."
+        val opacity = parts[2].toFloatOrNull()
+            ?: return "Grid opacity must be a number from 0.1 to 1.0."
+        val colorIndex = parts[3].toIntOrNull()
+            ?: return "Grid color index must be an integer from 0 to 5."
+        if (spacing !in 4f..64f) return "Grid size must be between 4 and 64 dp."
+        if (opacity !in 0.1f..1f) return "Grid opacity must be between 0.1 and 1.0."
+        if (colorIndex !in gridColors.indices) return "Grid color index must be between 0 and 5."
+
+        gridSpacingDp = spacing
+        gridOpacity = opacity
+        gridColorIndex = colorIndex
+        gridColor = gridColors[colorIndex]
+        synchronized(enabledTools) {
+            if (isEnabled) enabledTools.add("grid") else enabledTools.remove("grid")
+        }
+        updateOverlay()
+        publishEvent("interface", "Grid ${if (isEnabled) "enabled" else "disabled"} at ${spacing}dp")
+        return "Grid ${if (isEnabled) "enabled" else "disabled"}: ${spacing}dp, ${"%.1f".format(opacity)} opacity, color $colorIndex."
+    }
+
+    fun interfaceToolEnabled(featureID: String): Boolean {
+        val nativeID = if (featureID == "colorize") "view_borders" else featureID
+        return synchronized(enabledTools) { nativeID in enabledTools }
+    }
+
+    fun setInterfaceToolEnabled(featureID: String, enabled: Boolean): String {
+        val nativeID = if (featureID == "colorize") "view_borders" else featureID
+        if (nativeID !in setOf("grid", "touches", "view_borders")) {
+            return "Interface toggle '$featureID' is not available on Android."
+        }
+        synchronized(enabledTools) {
+            if (enabled) enabledTools.add(nativeID) else enabledTools.remove(nativeID)
+        }
+        updateOverlay()
+        publishEvent("interface", "$nativeID ${if (enabled) "enabled" else "disabled"}")
+        return "$nativeID ${if (enabled) "enabled" else "disabled"}."
     }
 
     fun recordNetwork(
@@ -717,7 +771,7 @@ object AndroidDebugTools {
     private fun interfaceSnapshot(context: Context, featureID: String): String {
         return when (featureID) {
             "view_hierarchy", "measurement" -> captureHierarchy()
-            "grid", "touches", "view_borders" -> "Enabled: ${synchronized(enabledTools) { featureID in enabledTools }}\nOverlay is drawn in the host app window without the system draw-over-other-apps permission.\nGrid: ${gridSpacingDp}dp, #${"%08X".format(gridColor)}\nRecent touches: ${recentTouches.size}"
+            "grid", "touches", "view_borders" -> "Enabled: ${synchronized(enabledTools) { featureID in enabledTools }}\nOverlay is drawn in the host app window without the system draw-over-other-apps permission.\nGrid: ${gridSpacingDp}dp, ${"%.1f".format(gridOpacity)} opacity, #${"%08X".format(gridColor)}\nRecent touches: ${recentTouches.size}"
             "animation_control" -> {
                 val keys = listOf("window_animation_scale", "transition_animation_scale", "animator_duration_scale")
                 "Android system animation scales:\n" + keys.joinToString("\n") { key ->
@@ -1130,7 +1184,12 @@ object AndroidDebugTools {
             super.onDraw(canvas)
             val active: Set<String> = synchronized(enabledTools) { enabledTools.toSet() }
             if ("grid" in active) {
-                gridPaint.color = gridColor
+                gridPaint.color = Color.argb(
+                    (gridOpacity * 255).roundToInt().coerceIn(0, 255),
+                    Color.red(gridColor),
+                    Color.green(gridColor),
+                    Color.blue(gridColor)
+                )
                 val spacing = (gridSpacingDp * density).coerceAtLeast(1f)
                 var x = 0f
                 while (x < width) { canvas.drawLine(x, 0f, x, height.toFloat(), gridPaint); x += spacing }
