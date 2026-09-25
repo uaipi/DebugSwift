@@ -196,7 +196,7 @@ object AndroidDebugTools {
             "http", "websocket", "network_injection", "network_thresholds", "graphql", "network_encryption", "har_export", "webview_network", "network_history" -> networkSnapshot(featureID)
             "performance_overview", "performance_widget", "battery", "disk", "memory_warning", "frame_drops", "hangs", "backtraces", "leaks", "thread_checker", "super_calls" -> performanceSnapshot(context, featureID)
             "view_hierarchy", "grid", "touches", "view_borders", "animation_control", "dark_mode", "compose_renders", "doc_recorder", "measurement", "color_palette" -> interfaceSnapshot(context, featureID)
-            "files", "preferences", "keychain", "sqlite", "realm", "core_data", "swift_data", "cookies", "security_audit" -> resourcesSnapshot(context, featureID)
+            "files", "preferences", "keychain", "persistent_data", "sqlite", "realm", "core_data", "swift_data", "cookies", "security_audit" -> resourcesSnapshot(context, featureID)
             "crashes", "console", "oslog_console", "device_info", "push_token", "push_simulator", "custom_actions", "custom_info", "deep_links", "loaded_libraries", "location", "event_bus", "agent_debug_log" -> appSnapshot(context, featureID)
             else -> "Unknown DebugSwift tool: $featureID"
         }
@@ -259,6 +259,8 @@ object AndroidDebugTools {
                 "Response decryption keys cleared from this process."
             }
             "set_preference" -> writePreference(context, value)
+            "delete_preference" -> deletePreference(context, value)
+            "clear_preferences" -> clearPreferenceStore(context, value)
             "reset_dark_mode" -> resetDarkMode(context)
             "set_grid" -> setGridOptions(value)
             "simulate_memory_warning" -> simulateMemoryWarning()
@@ -874,6 +876,7 @@ object AndroidDebugTools {
                 val values = context.getSharedPreferences(name, Context.MODE_PRIVATE).all
                 "$name (${values.size} values)\n" + values.entries.joinToString("\n") { "${it.key} = ${safeValue(it.value)}" }
             }.ifEmpty { "No host preferences registered. Call AndroidDebugTools.registerPreferences(name) during app startup." }
+            "persistent_data" -> persistentDataSnapshot(context)
             "keychain" -> {
                 val store = KeyStore.getInstance("AndroidKeyStore").apply { load(null) }
                 "Android Keystore aliases:\n" + store.aliases().toList().joinToString("\n").ifEmpty { "none" } + "\nPrivate key and secret bytes are not exported."
@@ -916,6 +919,25 @@ object AndroidDebugTools {
         val filterSummary = logcatFilter.takeIf { it.isNotBlank() }?.let { "\nFilter: $it" }.orEmpty()
         return "Android Logcat records for this process PID ${Process.myPid()}$filterSummary\n\n" +
             filtered.ifEmpty { "No matching Logcat records are currently available." }
+    }
+
+    private fun persistentDataSnapshot(context: Context): String {
+        val preferenceDirectory = File(context.applicationInfo.dataDir, "shared_prefs")
+        val preferenceNames = (registeredPreferences + preferenceDirectory.listFiles()
+            .orEmpty()
+            .filter { it.isFile && it.extension.equals("xml", ignoreCase = true) }
+            .map { it.nameWithoutExtension }).toSet()
+        val preferences = preferenceNames.sorted().joinToString("\n\n") { name ->
+            val values = context.getSharedPreferences(name, Context.MODE_PRIVATE).all
+            "$name (${values.size} values)\n" +
+                values.entries.sortedBy { it.key }.joinToString("\n") { "${it.key} = ${safeValue(it.value)}" }.ifEmpty { "empty" }
+        }.ifEmpty { "No preference stores found." }
+        val aliases = runCatching {
+            KeyStore.getInstance("AndroidKeyStore").apply { load(null) }.aliases().toList().sorted()
+        }.getOrDefault(emptyList())
+        return "App preferences (SharedPreferences)\n$preferences\n\n" +
+            "Secure storage (Android Keystore)\n" + aliases.joinToString("\n").ifEmpty { "No aliases found." } +
+            "\nPrivate key and secret bytes are not exported. Use Preferences to add, remove, or clear values in registered stores."
     }
 
     private fun appSnapshot(context: Context, featureID: String): String {
@@ -1076,6 +1098,7 @@ object AndroidDebugTools {
             "agent_debug_log" -> File(context.filesDir, AGENT_LOG_FILENAME).takeIf { it.exists() }
             "crashes" -> File(context.cacheDir, "debugswift-crashes-${System.currentTimeMillis()}.txt").apply { writeText(crashRecords.joinToString("\n\n")) }
             "files" -> exportCurrentFile(context)
+            "preferences", "persistent_data" -> File(context.cacheDir, "debugswift-${featureID}-${System.currentTimeMillis()}.txt").apply { writeText(snapshot(featureID)) }
             "color_palette" -> File(context.cacheDir, "debugswift-palette-${System.currentTimeMillis()}.txt").apply { writeText(lastPalette.joinToString("\n")) }
             "sqlite", "core_data", "swift_data" -> File(context.cacheDir, "debugswift-resources-${System.currentTimeMillis()}.txt").apply { writeText(snapshot(featureID)) }
             "doc_recorder" -> File(lastRecordingPath).takeIf { lastRecordingPath.isNotEmpty() && it.exists() }
@@ -1595,6 +1618,37 @@ object AndroidDebugTools {
         editor.apply()
         publishEvent("resources", "Preference updated: $storeName.$key")
         return "Preference updated."
+    }
+
+    private fun deletePreference(context: Context, value: String): String {
+        val parts = value.split("|", limit = 2)
+        if (parts.size != 2 || parts[0].isBlank() || parts[1].isBlank()) return "Enter preferenceStore|key."
+        val storeName = parts[0].trim()
+        val key = parts[1].trim()
+        if (storeName == PREFS || storeName !in registeredPreferences) {
+            return "Choose a registered host preference store."
+        }
+        val store = context.getSharedPreferences(storeName, Context.MODE_PRIVATE)
+        if (key !in store.all) return "Preference '$key' was not found in '$storeName'."
+        store.edit().remove(key).apply()
+        publishEvent("resources", "Preference removed: $storeName.$key")
+        return "Preference '$key' removed from '$storeName'."
+    }
+
+    private fun clearPreferenceStore(context: Context, value: String): String {
+        val parts = value.split("|", limit = 2)
+        if (parts.size != 2 || parts[1].trim() != "CLEAR") {
+            return "Enter preferenceStore|CLEAR to confirm removing all values from a store."
+        }
+        val storeName = parts[0].trim()
+        if (storeName.isBlank() || storeName == PREFS || storeName !in registeredPreferences) {
+            return "Choose a registered host preference store."
+        }
+        val store = context.getSharedPreferences(storeName, Context.MODE_PRIVATE)
+        val removedCount = store.all.size
+        store.edit().clear().apply()
+        publishEvent("resources", "Preference store cleared: $storeName")
+        return "Cleared $removedCount values from '$storeName'."
     }
 
     private fun listFiles(directory: File): String = directory.listFiles()?.sortedBy { it.name }?.take(100)?.joinToString("\n") {

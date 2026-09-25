@@ -184,8 +184,9 @@ enum DebugSwiftArea: String, CaseIterable, Identifiable, Hashable {
             #else
             return [
                 .init("files", "File Browser", "Browse the app sandbox, databases, cache, and exported files."),
-                .init("preferences", "Preferences", "View and update registered Android SharedPreferences values."),
+                .init("preferences", "Preferences", "View and manage registered Android SharedPreferences values."),
                 .init("keychain", "Secure Storage", "Inspect aliases in Android Keystore without exposing private key material."),
+                .init("persistent_data", "Persistent Data", "Inspect app preferences and Android Keystore aliases together."),
                 .init("sqlite", "Database Browser", "Browse SQLite tables, rows, and run SQL queries."),
                 .init("realm", "Realm Browser", "Inspect Realm databases registered by the host app."),
                 .init("core_data", "Room Database", "Browse the Android database layer, including registered Room databases."),
@@ -489,7 +490,9 @@ struct DebugSwiftFeatureDetail: View {
         case "network_encryption":
             ["refresh", "register_key", "clear_keys"]
         case "preferences":
-            ["refresh", "set_preference"]
+            ["refresh", "set_preference", "delete_preference", "clear_preferences", "export"]
+        case "persistent_data":
+            ["refresh", "set_preference", "delete_preference", "clear_preferences", "export"]
         case "files":
             ["refresh", "browse_files", "export"]
         case "realm":
@@ -529,7 +532,7 @@ struct DebugSwiftFeatureDetail: View {
         case "network_thresholds": "Request limit,window seconds"
         case "network_encryption": "URL regex:base64 AES key (body is base64 nonce + AES-GCM ciphertext)"
         case "grid": "Spacing dp, optional color: 24,#663399FF"
-        case "preferences": "Store|key=value"
+        case "preferences", "persistent_data": "Store|key=value to write; Store|key to remove; Store|CLEAR to delete all"
         case "files": "App path: files/, cache/, or databases/"
         case "push_simulator": "Notification title | message | delay in seconds"
         case "sqlite", "core_data", "swift_data": "Database name|SQL statement"
@@ -560,6 +563,8 @@ struct DebugSwiftFeatureDetail: View {
         case "set_grid": "Set grid spacing and color"
         case "simulate_memory_warning": "Simulate memory warning"
         case "set_preference": "Write preference"
+        case "delete_preference": "Remove preference"
+        case "clear_preferences": "Clear store (enter Store|CLEAR)"
         case "browse_files": "Open path"
         case "notify": "Post test notification"
         case "open_animation_settings": "Open Developer options"
