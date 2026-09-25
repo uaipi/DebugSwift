@@ -527,6 +527,7 @@ object AndroidDebugTools {
                 val action = synchronized(customActions) { customActions[value] }
                 if (action == null) "No registered action named '$value'." else runCatching { action(); "Action '$value' completed." }.getOrElse { "Action failed: ${it.message}" }
             }
+            "copy_token" -> copyPushToken(context)
             "report_info" -> {
                 val parts = value.split("=", limit = 2)
                 if (parts.size != 2 || parts[0].isBlank()) "Enter name=value."
@@ -1649,6 +1650,15 @@ object AndroidDebugTools {
             "device_info" -> deviceInfo(context)
             else -> deviceInfo(context)
         }
+    }
+
+    private fun copyPushToken(context: Context): String {
+        val token = pushToken.takeIf { it.isNotBlank() && !it.startsWith("No FCM token has been reported") }
+            ?: return "No FCM token is available to copy."
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as? android.content.ClipboardManager
+            ?: return "Android clipboard is unavailable."
+        clipboard.setPrimaryClip(ClipData.newPlainText("Push token", token))
+        return "FCM token copied to the clipboard."
     }
 
     private fun clear(featureID: String): String {

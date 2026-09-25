@@ -13,8 +13,8 @@ public struct CustomData {
         self.infos = infos
     }
 
-    let title: String
-    let infos: [Info]
+    public let title: String
+    public let infos: [Info]
 }
 
 extension CustomData {
@@ -24,7 +24,7 @@ extension CustomData {
             self.subtitle = subtitle
         }
 
-        let title: String
-        let subtitle: String
+        public let title: String
+        public let subtitle: String
     }
 }

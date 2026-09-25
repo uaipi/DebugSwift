@@ -19,7 +19,7 @@ public enum UserInfo {
     }
 
     @MainActor
-    static var infos: [Info] {
+    public static var infos: [Info] {
         [
             getAppVersionInfo(),
             getAppBuildInfo(),

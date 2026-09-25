@@ -21,7 +21,7 @@ public struct DebugSwiftAndroidPanel: View {
 }
 
 private struct DebugSwiftAndroidPanelContent: View {
-    @State var selectedArea: DebugSwiftArea = .network
+    @State private var selectedArea: DebugSwiftArea = .network
 
     var body: some View {
         VStack(spacing: 0) {
@@ -276,7 +276,7 @@ private struct DebugSwiftFeatureDestination: View {
         } else if ["swiftui_render", "doc_recorder", "color_palette"].contains(feature.id) {
             DebugSwiftIOSNativeInterfaceHost(featureID: feature.id)
                 .ignoresSafeArea(edges: .bottom)
-        } else if ["crashes", "console", "oslog_console", "location", "loaded_libraries", "push_simulator", "deep_links", "event_bus", "agent_debug_log", "device_info", "push_token", "custom_actions", "custom_info"].contains(feature.id) {
+        } else if ["crashes", "console", "oslog_console", "location", "loaded_libraries", "push_simulator", "deep_links", "event_bus", "agent_debug_log"].contains(feature.id) {
             DebugSwiftIOSNativeAppHost(featureID: feature.id)
                 .ignoresSafeArea(edges: .bottom)
         } else if ["files", "user_defaults", "keychain", "persistent_data", "core_data", "swift_data", "http_cookies", "database", "security_audit"].contains(feature.id) {
@@ -477,8 +477,8 @@ private struct DebugSwiftIOSNativePerformanceHost: UIViewControllerRepresentable
 
 struct DebugSwiftFeatureDetail: View {
     let feature: DebugSwiftTool
-    @State var output = ""
-    @State var command = ""
+    @State private var output = ""
+    @State private var command = ""
 
     var body: some View {
         ScrollView {
@@ -567,10 +567,16 @@ struct DebugSwiftFeatureDetail: View {
             ["refresh", "toggle", "capture"]
         case "push_simulator":
             ["refresh", "toggle", "notify", "simulate_template", "run_scenario", "set_notification_config", "add_template", "remove_template", "history_page", "interact_notification", "resend_notification", "remove_notification", "clear_push_history", "export", "open_notification_settings"]
+        case "device_info", "push_token":
+            ["refresh", "copy_token"]
+        case "custom_info":
+            #if os(Android)
+            ["refresh", "report_info"]
+            #else
+            ["refresh"]
+            #endif
         case "custom_actions":
             ["refresh", "run_custom"]
-        case "custom_info":
-            ["refresh", "report_info"]
         default:
             ["refresh", "capture"]
         }
@@ -590,7 +596,9 @@ struct DebugSwiftFeatureDetail: View {
         case "push_simulator": "Notification command or ID"
         case "sqlite", "core_data", "swift_data": "Database name|SQL statement"
         case "custom_actions": "Registered action title"
+        #if os(Android)
         case "custom_info": "Name=value"
+        #endif
         default: nil
         }
     }
@@ -611,6 +619,7 @@ struct DebugSwiftFeatureDetail: View {
         case "filter_all_frames": "Show all frames"
         case "copy_url": "Copy connection URL"
         case "copy_payload": "Copy selected payload"
+        case "copy_token": "Copy push token"
         case "send_frame": "Send text or binary frame"
         case "resend_frame": "Resend selected frame"
         case "close_connection": "Close connection"
@@ -675,19 +684,51 @@ public enum DebugSwiftAndroidRuntime {
         #endif
     }
 
+    @MainActor
     public static func snapshot(featureID: String) -> String {
         #if os(Android)
         return DebugSwiftNativeBridge.snapshot(featureID)
         #else
-        return "Use the UIKit debugger on iOS to inspect live app data."
+        switch featureID {
+        case "device_info":
+            return UserInfo.infos.map { "\($0.title) \($0.detail)" }.joined(separator: "\n")
+        case "push_token":
+            let token = DebugSwift.APNSToken.deviceToken ?? "No APNS token has been reported."
+            return "Registration: \(DebugSwift.APNSToken.registrationState.rawValue)\nEnvironment: \(DebugSwift.APNSToken.environment.rawValue)\nToken: \(token)"
+        case "custom_info":
+            let sections = DebugSwift.App.shared.customInfo?() ?? []
+            let lines = sections.flatMap { section in
+                [section.title] + section.infos.map { "  \($0.title): \($0.subtitle)" }
+            }
+            return lines.isEmpty ? "No custom diagnostic data provided." : lines.joined(separator: "\n")
+        case "custom_actions":
+            let sections = DebugSwift.App.shared.customAction?() ?? []
+            let lines = sections.flatMap { section in
+                [section.title] + section.actions.map { "  \($0.title)" }
+            }
+            return lines.isEmpty ? "No custom actions registered by the host app." : lines.joined(separator: "\n")
+        default:
+            return "Open the UIKit debugger on iOS to inspect live app data."
+        }
         #endif
     }
 
+    @MainActor
     public static func perform(featureID: String, actionID: String, value: String = "") -> String {
         #if os(Android)
         return DebugSwiftNativeBridge.perform(featureID, actionID, value)
         #else
-        return "Open the UIKit debugger on iOS to run this tool."
+        if actionID == "copy_token", ["device_info", "push_token"].contains(featureID) {
+            return DebugSwift.APNSToken.copyToClipboard() ? "APNS token copied to the clipboard." : "No registered APNS token is available to copy."
+        }
+        if featureID == "custom_actions", actionID == "run_custom" {
+            let actionGroups = DebugSwift.App.shared.customAction?() ?? []
+            let action = actionGroups.flatMap { $0.actions }.first { $0.title == value }
+            guard let action, let run = action.action else { return "No registered action named '\(value)'." }
+            run()
+            return "Action '\(value)' completed."
+        }
+        return "This action is not available for \(featureID)."
         #endif
     }
 
