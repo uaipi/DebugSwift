@@ -33,6 +33,11 @@ let package = Package(
             name: "DebugSwiftCore",
             path: "DebugSwiftCore/Sources/DebugSwiftCore"
         ),
+        .testTarget(
+            name: "DebugSwiftCoreTests",
+            dependencies: ["DebugSwiftCore"],
+            path: "DebugSwiftCore/Tests/DebugSwiftCoreTests"
+        ),
         .target(
             name: "DebugSwift",
             dependencies: ["DebugSwiftCore"],
