@@ -7,14 +7,14 @@
 
 import Foundation
 
-package enum URLPatternMatchStrategy {
+public enum URLPatternMatchStrategy {
     /// Pattern can match any substring of the value.
     case contains
     /// Pattern must match the whole value.
     case full
 }
 
-package enum URLQueryPatternMatchStrategy {
+public enum URLQueryPatternMatchStrategy {
     /// Query string is ignored.
     case ignore
     /// Pattern query items must exist in URL query items; extra URL query items are allowed.
@@ -25,7 +25,7 @@ package enum URLQueryPatternMatchStrategy {
 
 extension String {
     /// Checks if the string matches a wildcard pattern with optional strategies for matching and case sensitivity.
-    package func matches(
+    public func matches(
         wildcardPattern pattern: String,
         strategy: URLPatternMatchStrategy = .contains,
         caseInsensitive: Bool = true
@@ -52,7 +52,7 @@ extension String {
     }
     
     /// Checks if the string matches any of the provided wildcard patterns with optional strategies for matching and case sensitivity.
-    package func matchesAny(
+    public func matchesAny(
         wildcardPatterns patterns: [String],
         strategy: URLPatternMatchStrategy = .contains,
         caseInsensitive: Bool = true
@@ -69,7 +69,7 @@ extension String {
 
 extension URL {
     /// Checks if the URL matches a wildcard pattern with optional strategies for matching, query item matching, and case sensitivity.
-    package func matches(
+    public func matches(
         wildcardPattern pattern: String,
         strategy: URLPatternMatchStrategy = .contains,
         queryStrategy: URLQueryPatternMatchStrategy = .subset,
@@ -112,7 +112,7 @@ extension URL {
     }
     
     /// Checks if the URL matches any of the provided wildcard patterns with optional strategies for matching, query item matching, and case sensitivity.
-    package func matchesAny(
+    public func matchesAny(
         wildcardPatterns patterns: [String],
         strategy: URLPatternMatchStrategy = .contains,
         queryStrategy: URLQueryPatternMatchStrategy = .subset,

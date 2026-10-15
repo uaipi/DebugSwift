@@ -16,7 +16,8 @@ Pod::Spec.new do |s|
     s.swift_version = '5.7'
   
     # Source files for building from source
-    s.source_files = 'DebugSwift/Sources/**/*'
+    # DebugSwiftCore ships in the same pod module, so its sources are compiled together.
+    s.source_files = 'DebugSwift/Sources/**/*', 'DebugSwiftCore/Sources/**/*'
     
     # Resource bundles
     s.resource_bundles = {

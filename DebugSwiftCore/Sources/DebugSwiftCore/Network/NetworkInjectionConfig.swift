@@ -57,7 +57,7 @@ public struct RequestDelayConfig: Sendable {
     }
     
     /// Get the actual delay to apply
-    package func getDelay() -> TimeInterval {
+    public func getDelay() -> TimeInterval {
         if let fixed = fixedDelay {
             return fixed
         }
@@ -65,7 +65,7 @@ public struct RequestDelayConfig: Sendable {
     }
     
     /// Check if this config should apply to a given request
-    package func shouldApply(to request: URLRequest) -> Bool {
+    public func shouldApply(to request: URLRequest) -> Bool {
         guard isEnabled else { return false }
         
         // Check URL patterns
@@ -137,7 +137,7 @@ public struct NetworkFailureConfig: Sendable {
         /// Custom error with domain and code
         case custom(domain: String, code: Int, description: String)
         
-        package func toError() -> Error {
+        public func toError() -> Error {
             switch self {
             case .timeout:
                 return NSError(
@@ -215,7 +215,7 @@ public struct NetworkFailureConfig: Sendable {
     }
     
     /// Check if failure should be injected for this request
-    package func shouldInjectFailure(for request: URLRequest) -> Bool {
+    public func shouldInjectFailure(for request: URLRequest) -> Bool {
         guard isEnabled else { return false }
         
         // Check URL patterns
@@ -240,12 +240,12 @@ public struct NetworkFailureConfig: Sendable {
     }
     
     /// Get the error to inject
-    package func getError() -> Error {
+    public func getError() -> Error {
         return failureType.toError()
     }
     
     /// Get HTTP status code for HTTP error type
-    package func getHTTPStatusCode() -> Int? {
+    public func getHTTPStatusCode() -> Int? {
         if case .httpError(let statusCode) = failureType {
             if let code = statusCode {
                 return code
@@ -318,7 +318,7 @@ public struct ResponseBodyRewriteConfig: Sendable {
     }
     
     /// Returns matching rewrite rule for request if enabled.
-    package func matchingRule(for request: URLRequest) -> ResponseBodyRewriteRule? {
+    public func matchingRule(for request: URLRequest) -> ResponseBodyRewriteRule? {
         guard isEnabled else { return nil }
         guard let url = request.url else { return nil }
         
