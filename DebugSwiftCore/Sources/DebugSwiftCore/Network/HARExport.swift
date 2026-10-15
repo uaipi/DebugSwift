@@ -118,14 +118,20 @@ public enum HAREncoder {
     /// Build a cURL command that reproduces the capture's request, so a developer
     /// can paste it into a terminal and replay the exact call outside the app.
     public static func curlCommand(for capture: HARCapture) -> String {
-        var parts = ["curl", "-X", capture.request.method, "'\(capture.request.url)'"]
-        for (key, value) in capture.request.headers {
-            parts.append("-H '\(key): \(value)'")
+        var parts = ["curl", "-X", capture.request.method, shellQuoted(capture.request.url)]
+        for key in capture.request.headers.keys.sorted() {
+            parts.append("-H \(shellQuoted("\(key): \(capture.request.headers[key] ?? "")"))")
         }
         if let body = capture.request.body, !body.isEmpty {
-            parts.append("-d '\(body)'")
+            parts.append("-d \(shellQuoted(body))")
         }
         return parts.joined(separator: " ")
+    }
+
+    /// Wraps a value in single quotes for a POSIX shell, closing and reopening the quotes
+    /// around any embedded single quote so the value survives paste-and-run unchanged.
+    static func shellQuoted(_ value: String) -> String {
+        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
 
     /// Replace sensitive header values with `<redacted>` so that exported HAR/cURL
