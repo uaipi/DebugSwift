@@ -14,6 +14,8 @@ SCHEME_NAME="DebugSwift"
 BUILD_DIR="$(pwd)/build"
 XCFRAMEWORK_DIR="$(pwd)/XCFramework"
 DERIVED_DATA_DIR="$(pwd)/DerivedData"
+ROOT_DIR="$(pwd)"
+PACKAGE_DIR="$(pwd)/build/xcframework-package"
 
 # Colors for output
 RED='\033[0;31m'
@@ -42,9 +44,9 @@ print_error() {
 # Function to clean up previous builds
 cleanup() {
     print_status "Cleaning up previous builds..."
-    rm -rf "$BUILD_DIR"
-    rm -rf "$XCFRAMEWORK_DIR"
-    rm -rf "$DERIVED_DATA_DIR"
+    rm -rf "${BUILD_DIR:?}"
+    rm -rf "${XCFRAMEWORK_DIR:?}"
+    rm -rf "${DERIVED_DATA_DIR:?}"
 }
 
 # Function to create directories
@@ -52,6 +54,39 @@ create_directories() {
     print_status "Creating build directories..."
     mkdir -p "$BUILD_DIR"
     mkdir -p "$XCFRAMEWORK_DIR"
+}
+
+# SwiftPM only builds a real .framework for a dynamic product, and the root package keeps its
+# libraries on automatic linkage. This helper package compiles DebugSwift and DebugSwiftCore into
+# one dynamic DebugSwift module (the layout the CocoaPods spec uses), so a single framework carries
+# both and the canImport guard skips `@_exported import DebugSwiftCore`.
+create_framework_package() {
+    print_status "Creating the framework package..."
+    mkdir -p "$PACKAGE_DIR/Sources/DebugSwift"
+    ln -s "$ROOT_DIR/DebugSwift/Sources" "$PACKAGE_DIR/Sources/DebugSwift/DebugSwiftSources"
+    ln -s "$ROOT_DIR/DebugSwiftCore/Sources/DebugSwiftCore" "$PACKAGE_DIR/Sources/DebugSwift/DebugSwiftCoreSources"
+    ln -s "$ROOT_DIR/DebugSwift/Resources" "$PACKAGE_DIR/Sources/DebugSwift/Resources"
+    cat > "$PACKAGE_DIR/Package.swift" << 'EOF'
+// swift-tools-version:6.0
+import PackageDescription
+
+let package = Package(
+    name: "DebugSwift",
+    defaultLocalization: "en",
+    platforms: [.iOS(.v16)],
+    products: [
+        .library(name: "DebugSwift", type: .dynamic, targets: ["DebugSwift"])
+    ],
+    targets: [
+        .target(
+            name: "DebugSwift",
+            resources: [.process("Resources")]
+        )
+    ],
+    swiftLanguageModes: [.v6]
+)
+EOF
+    print_success "Framework package created"
 }
 
 # Function to build framework for a specific destination using Swift Package Manager
@@ -63,37 +98,37 @@ build_framework() {
     
     print_status "Building $FRAMEWORK_NAME for $destination ($arch)..."
     
-    # Build using xcodebuild with Swift Package Manager
-    xcodebuild -scheme "$FRAMEWORK_NAME" \
+    # Build the dynamic framework package with xcodebuild
+    (cd "$PACKAGE_DIR" && xcodebuild -scheme "$FRAMEWORK_NAME" \
                -destination "$destination" \
                -configuration Release \
                -sdk "$sdk" \
                -derivedDataPath "$DERIVED_DATA_DIR" \
+               -skipPackagePluginValidation \
                ARCHS="$arch" \
                VALID_ARCHS="$arch" \
                ONLY_ACTIVE_ARCH=NO \
                BUILD_LIBRARY_FOR_DISTRIBUTION=YES \
                SKIP_INSTALL=NO \
                CONFIGURATION_BUILD_DIR="$output_dir" \
-               build
-    
-    if [[ $? -ne 0 ]]; then
+               build) || {
         print_error "Failed to build for $destination"
         exit 1
-    fi
-    
-    # The framework should be in the build products directory
-    # Find and copy it to our expected location
-    local built_framework=$(find "$DERIVED_DATA_DIR" -name "$FRAMEWORK_NAME.framework" -path "*$arch-$sdk*" | head -1)
-    if [[ -n "$built_framework" ]]; then
-        print_status "Found built framework at: $built_framework"
-        mkdir -p "$output_dir"
-        cp -R "$built_framework" "$output_dir/"
-    else
-        print_error "Could not find built framework for $arch-$sdk"
+    }
+
+    # SwiftPM places the framework in PackageFrameworks and the Swift module beside it.
+    local built_framework="$output_dir/PackageFrameworks/$FRAMEWORK_NAME.framework"
+    local built_module="$output_dir/$FRAMEWORK_NAME.swiftmodule"
+    if [[ ! -d "$built_framework" || ! -d "$built_module" ]]; then
+        print_error "Could not find the built framework or module for $arch-$sdk in $output_dir"
         exit 1
     fi
-    
+
+    # A slice needs its Swift module inside the framework so consumers can import it.
+    cp -R "$built_framework" "$output_dir/$FRAMEWORK_NAME.framework"
+    mkdir -p "$output_dir/$FRAMEWORK_NAME.framework/Modules"
+    cp -R "$built_module" "$output_dir/$FRAMEWORK_NAME.framework/Modules/$FRAMEWORK_NAME.swiftmodule"
+
     print_success "Successfully built for $destination ($arch)"
 }
 
@@ -184,7 +219,8 @@ main() {
     
     cleanup
     create_directories
-    
+    create_framework_package
+
     # Build for iOS Device (arm64)
     build_framework "generic/platform=iOS" "iphoneos" "arm64"
     
@@ -204,6 +240,7 @@ main() {
     local universal_sim="$BUILD_DIR/arm64_x86_64-iphonesimulator/$FRAMEWORK_NAME.framework"
     
     # Copy arm64 framework as base
+    mkdir -p "$(dirname "$universal_sim")"
     cp -R "$arm64_sim" "$universal_sim"
     
     # Create universal binary
@@ -212,6 +249,9 @@ main() {
          "$x86_64_sim/$FRAMEWORK_NAME" \
          -output "$universal_sim/$FRAMEWORK_NAME"
     
+    # The universal slice needs the Swift module files of both architectures
+    cp -R "$x86_64_sim/Modules/$FRAMEWORK_NAME.swiftmodule/." "$universal_sim/Modules/$FRAMEWORK_NAME.swiftmodule/"
+
     print_success "Universal simulator framework created"
     
     create_xcframework
