@@ -1,0 +1,6 @@
+# Configuration file for Skip (https://skip.dev) project
+#
+# Native (Skip Fuse) module: the same SwiftUI debug panel runs on iOS and Android.
+skip:
+  mode: 'native'
+  package: 'debug.swift.ui'
