@@ -48,6 +48,32 @@ The Swift package exports `DebugSwift` and `DebugSwiftAndroid` products. `DebugS
 
 Build the Android sample with `skip export --project Example/Android --no-ios --android --arch aarch64 --dir build/skip-android`. Android networking capture and request injection require the host to add the provided OkHttp interceptor (or a matching hook for its networking stack). Host callbacks for preferences, Room/Realm databases, location, push tokens, and custom diagnostics are documented in [the Android sample guide](Example/Android/README.md).
 
+## DebugSwiftCore (Skip Fuse)
+
+`DebugSwiftCore` is a Foundation-only product with no UIKit, so it builds natively for iOS and for Android through Skip Fuse. It holds the network types that do not depend on a UI or a networking stack: HAR and cURL export, the GraphQL parser, injection and rewrite rules, URL pattern matching, and `NetworkRecorder`.
+
+Feed the recorder from whatever transport the app uses; it keeps a bounded history, masks `Authorization`, `Cookie` and `Set-Cookie` on ingestion, and truncates large bodies:
+
+```swift
+import DebugSwiftCore
+
+await NetworkRecorder.shared.record(NetworkRecord(
+    duration: 0.25,
+    method: "GET",
+    url: "https://api.example.com/vehicles",
+    outcome: .response(statusCode: 200, headers: [:], body: data)
+))
+
+for await _ in await NetworkRecorder.shared.changes() {
+    let records = await NetworkRecorder.shared.snapshot()
+    // render records in any UI
+}
+```
+
+`DebugSwift` re-exports the module, so existing `import DebugSwift` code keeps compiling. A dynamic library exports its public symbols, so add the dependency only to debug builds: have the package manifest drop it for store builds, then confirm the release binary has no `DebugSwiftCore` symbols.
+
+Run the Core tests on the macOS host without building the UIKit target: `swift build --build-system native --product DebugSwiftPackageTests && swift test --build-system native --skip-build`.
+
 ## Features
 
 ### 🌐 Network Inspector

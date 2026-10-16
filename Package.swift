@@ -14,6 +14,10 @@ let package = Package(
             targets: ["DebugSwift"]
         ),
         .library(
+            name: "DebugSwiftCore",
+            targets: ["DebugSwiftCore"]
+        ),
+        .library(
             name: "DebugSwiftAndroid",
             type: .dynamic,
             targets: ["DebugSwiftAndroid"]
@@ -24,9 +28,19 @@ let package = Package(
         .package(url: "https://github.com/skiptools/skip-ui.git", from: "1.60.0")
     ],
     targets: [
+        // Foundation-only, no UIKit: compiles natively for iOS and Android (Skip Fuse).
+        .target(
+            name: "DebugSwiftCore",
+            path: "DebugSwiftCore/Sources/DebugSwiftCore"
+        ),
+        .testTarget(
+            name: "DebugSwiftCoreTests",
+            dependencies: ["DebugSwiftCore"],
+            path: "DebugSwiftCore/Tests/DebugSwiftCoreTests"
+        ),
         .target(
             name: "DebugSwift",
-            dependencies: [],
+            dependencies: ["DebugSwiftCore"],
             path: "DebugSwift",
             resources: [
                 .process("Resources")
