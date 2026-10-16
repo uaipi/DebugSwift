@@ -13,8 +13,8 @@ public struct CustomAction {
         self.actions = actions
     }
 
-    let title: String
-    let actions: Actions
+    public let title: String
+    public let actions: Actions
 }
 
 extension CustomAction {
@@ -26,7 +26,7 @@ extension CustomAction {
             self.action = action
         }
 
-        let title: String
-        let action: (() -> Void)?
+        public let title: String
+        public let action: (() -> Void)?
     }
 }

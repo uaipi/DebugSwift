@@ -54,12 +54,14 @@ final class HttpDatasource: @unchecked Sendable {
             if model.isEncrypted {
                 // Try custom decryptor first
                 model.decryptedResponseData = encryptionService.customDecrypt(responseData, for: model.url)
+            }
 
-                // If custom decryptor didn't work, try with registered keys
-                if model.decryptedResponseData == nil {
-                    let decryptionKey = encryptionService.getDecryptionKey(for: model.url)
-                    model.decryptedResponseData = encryptionService.decrypt(responseData, using: decryptionKey)
-                }
+            // Registered AES keys are URL-scoped, so try them even when the response is
+            // base64 text whose entropy is lower than the binary encrypted payload.
+            if model.decryptedResponseData == nil,
+               let decryptionKey = encryptionService.getDecryptionKey(for: model.url) {
+                model.decryptedResponseData = encryptionService.decrypt(responseData, using: decryptionKey)
+                if model.decryptedResponseData != nil { model.isEncrypted = true }
             }
         }
         

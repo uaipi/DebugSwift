@@ -10,14 +10,14 @@ import Foundation
 // MARK: - Secure Storage Audit
 
 /// A single finding from a secure-storage audit.
-public struct SecurityFinding: Equatable {
-    public enum Severity: String, Equatable {
+public struct SecurityFinding: Codable, Equatable, Sendable {
+    public enum Severity: String, Codable, Equatable, Sendable {
         case info
         case warning
         case critical
     }
 
-    public enum Source: String, Equatable {
+    public enum Source: String, Codable, Equatable, Sendable {
         case userDefaults
         case infoPlist
         case bundle

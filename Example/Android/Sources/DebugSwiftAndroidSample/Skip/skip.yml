@@ -1,0 +1,12 @@
+# Skip configuration for DebugSwiftAndroidSample module
+#
+# Kotlin dependencies and Gradle build options for this module can be configured here
+#build:
+#  contents:
+#    - block: 'dependencies'
+#      contents:
+#        - 'implementation("androidx.compose.runtime:runtime")'
+
+# shared SwiftUI app module, transpiled to Compose for Android
+skip:
+  mode: 'transpiled'

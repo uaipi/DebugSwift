@@ -133,4 +133,217 @@ public class DebugSwift {
 
         return tabBar
     }
+
+    /// Returns one native feature screen wrapped in its own navigation controller.
+    /// Shared SwiftUI panels can use this to keep category navigation in SwiftUI
+    /// while retaining the UIKit implementation for feature screens that have not
+    /// been migrated yet.
+    @MainActor
+    public static func debugFeatureViewController(for feature: DebugSwiftFeature) -> UIViewController {
+        let rootController: UIViewController
+
+        switch feature {
+        case .network:
+            rootController = NetworkViewController()
+        case .performance:
+            rootController = PerformanceViewController()
+        case .interface:
+            rootController = InterfaceViewController()
+        case .resources:
+            rootController = ResourcesViewController()
+        case .app:
+            rootController = AppViewController()
+        }
+
+        rootController.navigationItem.largeTitleDisplayMode = .always
+
+        let navigationController = UINavigationController(rootViewController: rootController)
+        navigationController.navigationBar.prefersLargeTitles = true
+        navigationController.navigationBar.tintColor = .white
+        navigationController.view.backgroundColor = .black
+        navigationController.overrideUserInterfaceStyle = .dark
+        return navigationController
+    }
+
+    /// The default feature categories that are currently visible in the debugger.
+    @MainActor
+    public static func availableDebugFeatures() -> [DebugSwiftFeature] {
+        DebugSwiftFeature.allCases.filter { !FeatureHandling.hiddenFeatures.contains($0) }
+    }
+}
+
+public extension DebugSwift {
+    /// The network tools exposed in the shared SwiftUI feature list.
+    @MainActor
+    static func availableNetworkFeatureIDs() -> [String] {
+        var featureIDs = ["http", "network_injection", "network_thresholds", "graphql", "network_encryption", "har_export", "webview_network"]
+        let disabledMethods = App.shared.disableMethods
+        if !disabledMethods.contains(.webSocket) {
+            featureIDs.append("websocket")
+        }
+        if disabledMethods.contains(.wkWebView) {
+            featureIDs.removeAll { $0 == "webview_network" }
+        }
+        #if canImport(SwiftData)
+        if #available(iOS 17.0, *),
+           FeatureHandling.enabledBetaFeatures.contains(.networkSessionPersistence),
+           NetworkSessionPersistenceManager.isPersistenceEnabledPreference {
+            featureIDs.append("network_history")
+        }
+        #endif
+        return featureIDs
+    }
+
+    /// Builds an existing UIKit network inspector for a single shared feature row.
+    @MainActor
+    static func debugNetworkViewController(for featureID: String) -> UIViewController? {
+        let rootController: UIViewController
+        switch featureID {
+        case "http", "graphql", "network_encryption", "har_export":
+            rootController = NetworkViewController(mode: .http)
+        case "websocket":
+            rootController = NetworkViewController(mode: .websocket)
+        case "webview_network":
+            rootController = NetworkViewController(mode: .webview)
+        case "network_injection":
+            rootController = NetworkInjectionSettingsController()
+        case "network_thresholds":
+            rootController = NetworkThresholdController()
+        case "network_history":
+            #if canImport(SwiftData)
+            guard #available(iOS 17.0, *) else { return nil }
+            rootController = NetworkSessionHistoryViewController()
+            #else
+            return nil
+            #endif
+        default:
+            return nil
+        }
+
+        rootController.navigationItem.largeTitleDisplayMode = .never
+        let navigationController = UINavigationController(rootViewController: rootController)
+        navigationController.navigationBar.prefersLargeTitles = false
+        navigationController.navigationBar.tintColor = .white
+        navigationController.view.backgroundColor = .black
+        navigationController.overrideUserInterfaceStyle = .dark
+        return navigationController
+    }
+
+    /// The app tools exposed in the shared SwiftUI feature list.
+    @MainActor
+    static func availableAppFeatureIDs() -> [String] {
+        var featureIDs = ["device_info", "push_token", "custom_actions", "custom_info"]
+        for action in AppViewController.ActionInfo.allCasesWithPermission {
+            switch action {
+            case .crash: featureIDs.append("crashes")
+            case .console: featureIDs.append("console")
+            case .oslogConsole: featureIDs.append("oslog_console")
+            case .location: featureIDs.append("location")
+            case .loadedLibraries: featureIDs.append("loaded_libraries")
+            case .pushNotifications: featureIDs.append("push_simulator")
+            case .deepLink: featureIDs.append("deep_links")
+            case .eventTimeline: featureIDs.append("event_bus")
+            case .agentDebugLog: featureIDs.append("agent_debug_log")
+            }
+        }
+        return featureIDs
+    }
+
+    /// Builds the existing UIKit detail screen for an app tool that has not yet
+    /// been migrated to shared SwiftUI.
+    @MainActor
+    static func debugAppViewController(for featureID: String) -> UIViewController? {
+        let rootController: UIViewController
+        switch featureID {
+        case "crashes":
+            rootController = CrashViewController()
+        case "console":
+            rootController = ResourcesGenericController(viewModel: AppConsoleViewModel())
+        case "oslog_console":
+            guard #available(iOS 15.0, *) else { return nil }
+            rootController = OSLogConsoleViewController()
+        case "location":
+            rootController = LocationViewController()
+        case "loaded_libraries":
+            rootController = LoadedLibrariesViewController()
+        case "push_simulator":
+            rootController = PushNotificationController()
+        case "deep_links":
+            rootController = DeepLinkViewController()
+        case "event_bus":
+            rootController = EventTimelineViewController()
+        case "agent_debug_log":
+            rootController = AgentDebugLogViewController()
+        case "device_info", "push_token", "custom_actions", "custom_info":
+            rootController = AppViewController()
+        default:
+            return nil
+        }
+
+        rootController.navigationItem.largeTitleDisplayMode = .never
+        let navigationController = UINavigationController(rootViewController: rootController)
+        navigationController.navigationBar.prefersLargeTitles = false
+        navigationController.navigationBar.tintColor = .white
+        navigationController.view.backgroundColor = .black
+        navigationController.overrideUserInterfaceStyle = .dark
+        return navigationController
+    }
+
+    /// The performance tools exposed in the shared SwiftUI feature list.
+    @MainActor
+    static func availablePerformanceFeatureIDs() -> [String] {
+        var featureIDs = [
+            "performance_overview", "performance_widget", "battery", "disk",
+            "memory_warning", "frame_drops", "hangs", "backtraces", "leaks",
+            "thread_checker", "super_calls"
+        ]
+        let disabledMethods = App.shared.disableMethods
+        if disabledMethods.contains(.leaksDetector) {
+            featureIDs.removeAll { $0 == "leaks" }
+        }
+        if disabledMethods.contains(.superCallDetector) {
+            featureIDs.removeAll { $0 == "super_calls" }
+        }
+        return featureIDs
+    }
+
+    /// Builds the existing UIKit implementation for one performance tool.
+    @MainActor
+    static func debugPerformanceViewController(for featureID: String) -> UIViewController? {
+        let rootController: UIViewController
+        switch featureID {
+        case "performance_overview":
+            rootController = PerformanceViewController(scope: .overview)
+        case "performance_widget":
+            rootController = PerformanceViewController(scope: .widget)
+        case "battery":
+            rootController = BatteryDebugController()
+        case "disk":
+            rootController = DiskDebugController()
+        case "memory_warning":
+            rootController = PerformanceViewController(scope: .memoryWarning)
+        case "frame_drops":
+            rootController = PerformanceViewController(scope: .frameDrops)
+        case "hangs":
+            rootController = PerformanceViewController(scope: .hangs)
+        case "backtraces":
+            rootController = PerformanceViewController(scope: .backtraces)
+        case "leaks":
+            rootController = PerformanceViewController(scope: .leaks)
+        case "thread_checker":
+            rootController = PerformanceThreadCheckerViewController()
+        case "super_calls":
+            rootController = ResourcesGenericController(viewModel: SuperCallViolationsViewModel())
+        default:
+            return nil
+        }
+
+        rootController.navigationItem.largeTitleDisplayMode = .never
+        let navigationController = UINavigationController(rootViewController: rootController)
+        navigationController.navigationBar.prefersLargeTitles = false
+        navigationController.navigationBar.tintColor = .white
+        navigationController.view.backgroundColor = .black
+        navigationController.overrideUserInterfaceStyle = .dark
+        return navigationController
+    }
 }

@@ -1,0 +1,8 @@
+# Skip Lite module for shared SwiftUI screens and the Android implementation.
+skip:
+  mode: 'transpiled'
+build:
+  contents:
+    - block: 'dependencies'
+      contents:
+        - 'implementation("com.squareup.okhttp3:okhttp:4.12.0")'

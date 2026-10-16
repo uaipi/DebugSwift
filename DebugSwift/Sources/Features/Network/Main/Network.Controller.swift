@@ -113,6 +113,16 @@ final class NetworkViewController: BaseController, MainFeatureType {
         setup()
     }
 
+    convenience init(mode: NetworkInspectorMode) {
+        self.init()
+        currentMode = mode
+        segmentedControl.selectedSegmentIndex = switch mode {
+        case .http: 0
+        case .websocket: 1
+        case .webview: 2
+        }
+    }
+
     override func viewDidLoad() {
         super.viewDidLoad()
         setupSegmentedControl()

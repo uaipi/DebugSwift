@@ -3,7 +3,7 @@ DebugSwift
 </h1>
 
 <p align="center">
-<img src="https://img.shields.io/badge/Platforms-iOS%2014.0+-blue.svg"/>
+<img src="https://img.shields.io/badge/Platforms-iOS%2016.0+-blue.svg"/>
 <img src="https://img.shields.io/github/v/release/DebugSwift/DebugSwift?style=flat&label=Swift%20Package%20Index&color=red"/>    
 <img src="https://img.shields.io/endpoint?url=https%3A%2F%2Fswiftpackageindex.com%2Fapi%2Fpackages%2FDebugSwift%2FDebugSwift%2Fbadge%3Ftype%3Dswift-versions"/>
 <img src="https://img.shields.io/github/license/DebugSwift/DebugSwift?style=flat"/>
@@ -38,9 +38,15 @@ DebugSwift
 
 ## Requirements
 
-- **iOS 14.0+**
+- **iOS 16.0+**
 - **Swift 6.0+**
 - **Xcode 16.0+**
+
+## Android with Skip
+
+The Swift package exports `DebugSwift` and `DebugSwiftAndroid` products. `DebugSwiftAndroidPanel` shares its category navigation, feature catalogues, and SwiftUI-compatible screens; Skip Lite compiles those views to Compose on Android. UIKit representables are limited to inspectors and system integrations that require iOS-native APIs. Android platform services use Kotlin, and iOS keeps its existing native services.
+
+Build the Android sample with `skip export --project Example/Android --no-ios --android --arch aarch64 --dir build/skip-android`. Android networking capture and request injection require the host to add the provided OkHttp interceptor (or a matching hook for its networking stack). Host callbacks for preferences, Room/Realm databases, location, push tokens, and custom diagnostics are documented in [the Android sample guide](Example/Android/README.md).
 
 ## Features
 
