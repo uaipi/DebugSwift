@@ -38,13 +38,13 @@ DebugSwift
 
 ## Requirements
 
-- **iOS 16.0+**
+- **iOS 17.0+**
 - **Swift 6.0+**
 - **Xcode 16.0+**
 
 ## Android with Skip
 
-The Swift package exports `DebugSwift` and `DebugSwiftAndroid` products. `DebugSwiftAndroidPanel` shares its category navigation, feature catalogues, and SwiftUI-compatible screens; Skip Lite compiles those views to Compose on Android. UIKit representables are limited to inspectors and system integrations that require iOS-native APIs. Android platform services use Kotlin, and iOS keeps its existing native services.
+The Swift package exports `DebugSwift`, `DebugSwiftCore` and `DebugSwiftUI`. `DebugSwiftUI` is a Skip Fuse module: `DebugPanel` and the five area screens are plain SwiftUI that runs natively on iOS and Android. UIKit representables host the iOS-only inspectors, Android platform services live in Kotlin inside the same module, and Swift reaches them over JNI. Call `DebugSwiftAndroidRuntime.install()` at launch on Android to start crash, ANR, frame and network capture early; opening the panel installs it too.
 
 Build the Android sample with `skip export --project Example/Android --no-ios --android --arch aarch64 --dir build/skip-android`. Android networking capture and request injection require the host to add the provided OkHttp interceptor (or a matching hook for its networking stack). Host callbacks for preferences, Room/Realm databases, location, push tokens, and custom diagnostics are documented in [the Android sample guide](Example/Android/README.md).
 
