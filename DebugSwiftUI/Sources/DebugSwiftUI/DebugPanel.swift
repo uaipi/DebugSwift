@@ -41,6 +41,13 @@ public struct DebugPanel: View {
                             Text(verbatim: "Network inspector")
                         }
                     }
+                    if DebugAndroidTools.isAvailable {
+                        NavigationLink {
+                            AndroidToolSnapshotView(featureID: "device_info", title: "Device info")
+                        } label: {
+                            Text(verbatim: "Device info")
+                        }
+                    }
                     ForEach(tools) { tool in
                         NavigationLink {
                             tool.makeContent()
