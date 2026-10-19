@@ -1,5 +1,5 @@
 import Foundation
-import DebugSwiftAndroid
+import DebugSwiftUI
 import SwiftUI
 
 /// The shared top-level view for the app, loaded from the platform-specific App delegates below.
