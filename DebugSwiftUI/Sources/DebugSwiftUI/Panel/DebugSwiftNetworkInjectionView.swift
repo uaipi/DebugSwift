@@ -49,7 +49,7 @@ struct DebugSwiftNetworkInjectionSettings: Codable {
     }
 }
 
-private struct DebugSwiftNetworkInjectionRuleDraft: Identifiable {
+struct DebugSwiftNetworkInjectionRuleDraft: Identifiable {
     var id: String
     var urlPattern: String
     var responseBody: String
@@ -94,13 +94,13 @@ private struct DebugSwiftNetworkInjectionRuleDraft: Identifiable {
 }
 
 struct DebugSwiftNetworkInjectionView: View {
-    @State private var settings = DebugSwiftNetworkInjectionSettings()
-    @State private var ruleDraft: DebugSwiftNetworkInjectionRuleDraft?
-    @State private var editingRuleID: String?
-    @State private var statusMessage = ""
-    @State private var showingResetConfirmation = false
-    @State private var showingCSVImporter = false
-    @State private var ruleSearchText = ""
+    @State var settings = DebugSwiftNetworkInjectionSettings()
+    @State var ruleDraft: DebugSwiftNetworkInjectionRuleDraft?
+    @State var editingRuleID: String?
+    @State var statusMessage = ""
+    @State var showingResetConfirmation = false
+    @State var showingCSVImporter = false
+    @State var ruleSearchText = ""
 
     private let methods = ["GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS"]
     private let failureTypes: [(String, String)] = [
@@ -424,8 +424,8 @@ struct DebugSwiftNetworkInjectionView: View {
     }
 }
 
-private struct DebugSwiftNetworkInjectionRuleEditor: View {
-    @Environment(\.dismiss) private var dismiss
+struct DebugSwiftNetworkInjectionRuleEditor: View {
+    @Environment(\.dismiss) var dismiss
     @State var draft: DebugSwiftNetworkInjectionRuleDraft
     let onSave: (DebugSwiftNetworkInjectionRuleDraft) -> Void
 
@@ -469,11 +469,11 @@ private struct DebugSwiftNetworkInjectionRuleEditor: View {
     }
 }
 
-private struct DebugSwiftNetworkInjectionCSVImporter: View {
-    @Environment(\.dismiss) private var dismiss
-    @State private var csvText = ""
-    @State private var showingFileImporter = false
-    @State private var importError = ""
+struct DebugSwiftNetworkInjectionCSVImporter: View {
+    @Environment(\.dismiss) var dismiss
+    @State var csvText = ""
+    @State var showingFileImporter = false
+    @State var importError = ""
     let onImport: (String) -> Void
 
     var body: some View {

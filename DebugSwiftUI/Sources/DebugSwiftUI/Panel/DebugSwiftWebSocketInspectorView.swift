@@ -1,20 +1,16 @@
 import Foundation
 import SwiftUI
 
-#if os(Android)
-import debug.swift.android.DebugSwiftNativeBridge
-#endif
-
 #if os(iOS)
 import DebugSwift
 #endif
 
-private struct DebugSwiftWebSocketInspectorSnapshot: Codable {
+struct DebugSwiftWebSocketInspectorSnapshot: Codable {
     let connections: [DebugSwiftWebSocketConnection]
     let frames: [DebugSwiftWebSocketFrame]
 }
 
-private struct DebugSwiftWebSocketConnection: Codable, Identifiable {
+struct DebugSwiftWebSocketConnection: Codable, Identifiable {
     let id: String
     let url: String
     let name: String
@@ -28,7 +24,7 @@ private struct DebugSwiftWebSocketConnection: Codable, Identifiable {
     let unreadFrameCount: Int
 }
 
-private struct DebugSwiftWebSocketFrame: Codable, Identifiable {
+struct DebugSwiftWebSocketFrame: Codable, Identifiable {
     let id: String
     let connectionID: String
     let timestampMilliseconds: Int64
@@ -48,15 +44,15 @@ private struct DebugSwiftWebSocketFrame: Codable, Identifiable {
 }
 
 struct DebugSwiftWebSocketInspectorView: View {
-    @State private var snapshot = DebugSwiftWebSocketInspectorSnapshot(connections: [], frames: [])
-    @State private var selectedConnectionID = ""
-    @State private var selectedFrameID = ""
-    @State private var searchText = ""
-    @State private var sendText = ""
-    @State private var direction = "All"
-    @State private var statusMessage = ""
-    @State private var confirmation = ""
-    @State private var refreshTimer: Timer?
+    @State var snapshot = DebugSwiftWebSocketInspectorSnapshot(connections: [], frames: [])
+    @State var selectedConnectionID = ""
+    @State var selectedFrameID = ""
+    @State var searchText = ""
+    @State var sendText = ""
+    @State var direction = "All"
+    @State var statusMessage = ""
+    @State var confirmation = ""
+    @State var refreshTimer: Timer?
 
     private var selectedConnection: DebugSwiftWebSocketConnection? {
         snapshot.connections.first { $0.id == selectedConnectionID }

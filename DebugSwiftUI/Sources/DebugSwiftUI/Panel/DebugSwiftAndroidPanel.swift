@@ -2,10 +2,6 @@ import Foundation
 
 import SwiftUI
 
-#if os(Android)
-import debug.swift.android.DebugSwiftNativeBridge
-#endif
-
 #if os(iOS)
 import DebugSwift
 import UIKit
@@ -20,8 +16,8 @@ public struct DebugSwiftAndroidPanel: View {
     }
 }
 
-private struct DebugSwiftAndroidPanelContent: View {
-    @State private var selectedArea: DebugSwiftArea = .network
+struct DebugSwiftAndroidPanelContent: View {
+    @State var selectedArea: DebugSwiftArea = .network
 
     var body: some View {
         VStack(spacing: 0) {
@@ -257,7 +253,7 @@ struct DebugSwiftFeatureList: View {
     }
 }
 
-private struct DebugSwiftFeatureDestination: View {
+struct DebugSwiftFeatureDestination: View {
     let feature: DebugSwiftTool
 
     @ViewBuilder
@@ -331,8 +327,8 @@ private struct DebugSwiftFeatureDestination: View {
     }
 }
 
-private struct DebugSwiftGridOverlaySettingsView: View {
-    @State private var settings = DebugSwiftGridOverlayState()
+struct DebugSwiftGridOverlaySettingsView: View {
+    @State var settings = DebugSwiftGridOverlayState()
 
     private let colorNames = ["Red", "Blue", "Green", "Yellow", "White", "Gray"]
     private let colors: [Color] = [.red, .blue, .green, .yellow, .white, .gray]
@@ -372,23 +368,7 @@ private struct DebugSwiftGridOverlaySettingsView: View {
                 Section("Color") {
                     HStack(spacing: 14) {
                         ForEach(0..<colors.count, id: \.self) { index in
-                            Button {
-                                update { $0.colorIndex = index }
-                            } label: {
-                                Circle()
-                                    .fill(colors[index])
-                                    .frame(width: 34, height: 34)
-                                    .overlay(Circle().stroke(Color.primary.opacity(0.6), lineWidth: settings.colorIndex == index ? 2.0 : 0.0))
-                                    .overlay {
-                                        if settings.colorIndex == index {
-                                            Image(systemName: "checkmark")
-                                                .font(.caption.bold())
-                                                .foregroundColor(index == 4 ? .black : .white)
-                                        }
-                                    }
-                            }
-                            .buttonStyle(.plain)
-                            .accessibilityLabel(colorNames[index])
+                            colorButton(index)
                         }
                     }
                     .padding(.vertical, 6)
@@ -399,6 +379,18 @@ private struct DebugSwiftGridOverlaySettingsView: View {
         .onAppear { settings = DebugSwiftAndroidRuntime.gridOverlaySettings() }
     }
 
+    func colorButton(_ index: Int) -> some View {
+        let isSelected = settings.colorIndex == index
+        let checkmark: Color = index == 4 ? Color.black : Color.white
+        return Button {
+            update { $0.colorIndex = index }
+        } label: {
+            DebugSwiftColorSwatch(color: colors[index], isSelected: isSelected, checkmarkColor: checkmark)
+        }
+        .buttonStyle(.plain)
+        .accessibilityLabel(Text(verbatim: colorNames[index]))
+    }
+
     private func update(_ change: (inout DebugSwiftGridOverlayState) -> Void) {
         var updated = settings
         change(&updated)
@@ -407,9 +399,30 @@ private struct DebugSwiftGridOverlaySettingsView: View {
     }
 }
 
-private struct DebugSwiftInterfaceSettingView: View {
+struct DebugSwiftColorSwatch: View {
+    let color: Color
+    let isSelected: Bool
+    let checkmarkColor: Color
+
+    var body: some View {
+        let ringWidth = isSelected ? 2.0 : 0.0
+        Circle()
+            .fill(color)
+            .frame(width: 34, height: 34)
+            .overlay(Circle().stroke(Color.primary.opacity(0.6), lineWidth: ringWidth))
+            .overlay {
+                if isSelected {
+                    Image(systemName: "checkmark")
+                        .font(.caption.bold())
+                        .foregroundColor(checkmarkColor)
+                }
+            }
+    }
+}
+
+struct DebugSwiftInterfaceSettingView: View {
     let featureID: String
-    @State private var isEnabled = false
+    @State var isEnabled = false
 
     private var title: String {
         switch featureID {
@@ -446,18 +459,18 @@ struct DebugSwiftGridOverlayState {
     var colorIndex = 0
 }
 
-private struct DebugSwiftNetworkThresholdView: View {
-    @State private var trackingEnabled = false
-    @State private var thresholdLimit = 1000
-    @State private var windowSeconds = 60
-    @State private var blockingEnabled = false
-    @State private var currentRequestCount = 0
-    @State private var totalBreaches = 0
-    @State private var endpointDetails = "No endpoint limits configured."
-    @State private var breachDetails = "No threshold breaches."
-    @State private var statusMessage = ""
-    @State private var confirmsHistoryClear = false
-    @State private var refreshTimer: Timer?
+struct DebugSwiftNetworkThresholdView: View {
+    @State var trackingEnabled = false
+    @State var thresholdLimit = 1000
+    @State var windowSeconds = 60
+    @State var blockingEnabled = false
+    @State var currentRequestCount = 0
+    @State var totalBreaches = 0
+    @State var endpointDetails = "No endpoint limits configured."
+    @State var breachDetails = "No threshold breaches."
+    @State var statusMessage = ""
+    @State var confirmsHistoryClear = false
+    @State var refreshTimer: Timer?
 
     var body: some View {
         Form {
@@ -612,7 +625,7 @@ private struct DebugSwiftNetworkThresholdView: View {
     }
 }
 
-private struct DebugSwiftConsoleEntry: Identifiable {
+struct DebugSwiftConsoleEntry: Identifiable {
     let id: Int
     let message: String
 }
@@ -645,12 +658,12 @@ struct DebugSwiftSecurityAuditSnapshot: Codable {
     let summary: String
 }
 
-private struct DebugSwiftSecurityAuditView: View {
-    @State private var audit = DebugSwiftSecurityAuditSnapshot(
+struct DebugSwiftSecurityAuditView: View {
+    @State var audit = DebugSwiftSecurityAuditSnapshot(
         findings: [],
         summary: "Run the audit to scan this app's settings and bundled resources."
     )
-    @State private var hasRun = false
+    @State var hasRun = false
 
     private var criticalFindings: [DebugSwiftSecurityAuditFinding] {
         audit.findings.filter { $0.severity == "critical" }
@@ -747,11 +760,11 @@ private struct DebugSwiftSecurityAuditView: View {
     }
 }
 
-private struct DebugSwiftConsoleView: View {
-    @State private var entries: [DebugSwiftConsoleEntry] = []
-    @State private var searchText = ""
-    @State private var statusMessage = ""
-    @State private var confirmsClear = false
+struct DebugSwiftConsoleView: View {
+    @State var entries: [DebugSwiftConsoleEntry] = []
+    @State var searchText = ""
+    @State var statusMessage = ""
+    @State var confirmsClear = false
 
     private var filteredEntries: [DebugSwiftConsoleEntry] {
         guard !searchText.isEmpty else { return entries }
@@ -852,7 +865,7 @@ private struct DebugSwiftConsoleView: View {
 }
 
 #if os(iOS)
-private struct DebugSwiftIOSNativeInterfaceHost: UIViewControllerRepresentable {
+struct DebugSwiftIOSNativeInterfaceHost: UIViewControllerRepresentable {
     let featureID: String
 
     func makeUIViewController(context: Context) -> UIViewController {
@@ -863,7 +876,7 @@ private struct DebugSwiftIOSNativeInterfaceHost: UIViewControllerRepresentable {
     func updateUIViewController(_ viewController: UIViewController, context: Context) {}
 }
 
-private struct DebugSwiftIOSNativeResourceHost: UIViewControllerRepresentable {
+struct DebugSwiftIOSNativeResourceHost: UIViewControllerRepresentable {
     let featureID: String
 
     func makeUIViewController(context: Context) -> UIViewController {
@@ -874,7 +887,7 @@ private struct DebugSwiftIOSNativeResourceHost: UIViewControllerRepresentable {
     func updateUIViewController(_ viewController: UIViewController, context: Context) {}
 }
 
-private struct DebugSwiftIOSNativeAppHost: UIViewControllerRepresentable {
+struct DebugSwiftIOSNativeAppHost: UIViewControllerRepresentable {
     let featureID: String
 
     func makeUIViewController(context: Context) -> UIViewController {
@@ -885,7 +898,7 @@ private struct DebugSwiftIOSNativeAppHost: UIViewControllerRepresentable {
     func updateUIViewController(_ viewController: UIViewController, context: Context) {}
 }
 
-private struct DebugSwiftIOSNativeNetworkHost: UIViewControllerRepresentable {
+struct DebugSwiftIOSNativeNetworkHost: UIViewControllerRepresentable {
     let featureID: String
 
     func makeUIViewController(context: Context) -> UIViewController {
@@ -896,7 +909,7 @@ private struct DebugSwiftIOSNativeNetworkHost: UIViewControllerRepresentable {
     func updateUIViewController(_ viewController: UIViewController, context: Context) {}
 }
 
-private struct DebugSwiftIOSNativePerformanceHost: UIViewControllerRepresentable {
+struct DebugSwiftIOSNativePerformanceHost: UIViewControllerRepresentable {
     let featureID: String
 
     func makeUIViewController(context: Context) -> UIViewController {
@@ -910,8 +923,8 @@ private struct DebugSwiftIOSNativePerformanceHost: UIViewControllerRepresentable
 
 struct DebugSwiftFeatureDetail: View {
     let feature: DebugSwiftTool
-    @State private var output = ""
-    @State private var command = ""
+    @State var output = ""
+    @State var command = ""
 
     var body: some View {
         ScrollView {

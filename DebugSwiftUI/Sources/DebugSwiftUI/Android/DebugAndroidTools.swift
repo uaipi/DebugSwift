@@ -13,7 +13,7 @@ enum DebugAndroidTools {
 
     static func snapshot(_ featureID: String) -> String {
         #if os(Android)
-            return DebugSwiftNativeBridge.string("snapshot", featureID)
+            return DebugSwiftNativeBridge.snapshot(featureID)
         #else
             return ""
         #endif

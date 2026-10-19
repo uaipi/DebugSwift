@@ -1,10 +1,6 @@
 import Foundation
 import SwiftUI
 
-#if os(Android)
-import debug.swift.android.DebugSwiftNativeBridge
-#endif
-
 #if os(iOS)
 import DebugSwift
 #endif
@@ -43,7 +39,7 @@ struct DebugSwiftNetworkRequestSnapshot: Codable, Identifiable {
     }
 }
 
-private struct DebugSwiftNetworkFilterSettings: Equatable {
+struct DebugSwiftNetworkFilterSettings: Equatable {
     var methods: Set<String> = []
     var statusRanges: Set<String> = []
     var contentTypes: Set<String> = []
@@ -94,11 +90,11 @@ private struct DebugSwiftNetworkFilterSettings: Equatable {
     }
 }
 
-private struct DebugSwiftNetworkInspectorSnapshot: Codable {
+struct DebugSwiftNetworkInspectorSnapshot: Codable {
     let requests: [DebugSwiftNetworkRequestSnapshot]
 }
 
-private struct DebugSwiftNetworkDecryptionSettings: Codable {
+struct DebugSwiftNetworkDecryptionSettings: Codable {
     var isEnabled = false
     var patterns: [String] = []
 }
@@ -123,23 +119,23 @@ struct DebugSwiftNetworkSessionSnapshot: Codable, Identifiable {
     }
 }
 
-private struct DebugSwiftNetworkSessionHistorySnapshot: Codable {
+struct DebugSwiftNetworkSessionHistorySnapshot: Codable {
     let sessions: [DebugSwiftNetworkSessionSnapshot]
     let retentionDays: Int
 }
 
-private struct DebugSwiftNetworkSessionRequestsSnapshot: Codable {
+struct DebugSwiftNetworkSessionRequestsSnapshot: Codable {
     let requests: [DebugSwiftNetworkRequestSnapshot]
 }
 
 struct DebugSwiftNetworkSessionHistoryView: View {
-    @State private var sessions: [DebugSwiftNetworkSessionSnapshot] = []
-    @State private var retentionDays = 7
-    @State private var isLoading = false
-    @State private var statusMessage = ""
-    @State private var confirmsClearAll = false
-    @State private var confirmsDelete = false
-    @State private var sessionToDelete: DebugSwiftNetworkSessionSnapshot?
+    @State var sessions: [DebugSwiftNetworkSessionSnapshot] = []
+    @State var retentionDays = 7
+    @State var isLoading = false
+    @State var statusMessage = ""
+    @State var confirmsClearAll = false
+    @State var confirmsDelete = false
+    @State var sessionToDelete: DebugSwiftNetworkSessionSnapshot?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -242,14 +238,14 @@ struct DebugSwiftNetworkSessionHistoryView: View {
     }
 }
 
-private struct DebugSwiftNetworkSessionRequestsView: View {
+struct DebugSwiftNetworkSessionRequestsView: View {
     let session: DebugSwiftNetworkSessionSnapshot
 
-    @State private var requests: [DebugSwiftNetworkRequestSnapshot] = []
-    @State private var searchText = ""
-    @State private var statusMessage = ""
-    @State private var isLoading = false
-    @State private var confirmsImport = false
+    @State var requests: [DebugSwiftNetworkRequestSnapshot] = []
+    @State var searchText = ""
+    @State var statusMessage = ""
+    @State var isLoading = false
+    @State var confirmsImport = false
 
     private var filteredRequests: [DebugSwiftNetworkRequestSnapshot] {
         let query = searchText.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -344,17 +340,17 @@ private struct DebugSwiftNetworkSessionRequestsView: View {
 struct DebugSwiftNetworkInspectorView: View {
     let featureID: String
 
-    @State private var requests: [DebugSwiftNetworkRequestSnapshot] = []
-    @State private var searchText = ""
-    @State private var selectedSource: String
-    @State private var statusMessage = ""
-    @State private var confirmsClear = false
-    @State private var showingFilters = false
-    @State private var filterSettings = DebugSwiftNetworkFilterSettings()
-    @State private var filterDraft = DebugSwiftNetworkFilterSettings()
-    @State private var decryptionSettings = DebugSwiftNetworkDecryptionSettings()
-    @State private var decryptionURLPattern = ""
-    @State private var decryptionBase64Key = ""
+    @State var requests: [DebugSwiftNetworkRequestSnapshot] = []
+    @State var searchText = ""
+    @State var selectedSource: String
+    @State var statusMessage = ""
+    @State var confirmsClear = false
+    @State var showingFilters = false
+    @State var filterSettings = DebugSwiftNetworkFilterSettings()
+    @State var filterDraft = DebugSwiftNetworkFilterSettings()
+    @State var decryptionSettings = DebugSwiftNetworkDecryptionSettings()
+    @State var decryptionURLPattern = ""
+    @State var decryptionBase64Key = ""
 
     init(featureID: String) {
         self.featureID = featureID
@@ -633,7 +629,7 @@ struct DebugSwiftNetworkInspectorView: View {
     }
 }
 
-private struct DebugSwiftNetworkFilterSheet: View {
+struct DebugSwiftNetworkFilterSheet: View {
     @Binding var filter: DebugSwiftNetworkFilterSettings
     let onApply: () -> Void
     let onCancel: () -> Void
@@ -719,7 +715,7 @@ private struct DebugSwiftNetworkFilterSheet: View {
     }
 }
 
-private struct DebugSwiftNetworkStat: View {
+struct DebugSwiftNetworkStat: View {
     let title: String
     let value: String
 
@@ -739,7 +735,7 @@ private struct DebugSwiftNetworkStat: View {
     }
 }
 
-private struct DebugSwiftNetworkRequestRow: View {
+struct DebugSwiftNetworkRequestRow: View {
     let request: DebugSwiftNetworkRequestSnapshot
 
     var body: some View {
@@ -784,13 +780,13 @@ private struct DebugSwiftNetworkRequestRow: View {
     }
 }
 
-private struct DebugSwiftNetworkRequestDetail: View {
+struct DebugSwiftNetworkRequestDetail: View {
     let request: DebugSwiftNetworkRequestSnapshot
     let featureID: String
 
-    @State private var searchText = ""
-    @State private var statusMessage = ""
-    @State private var confirmsReplay = false
+    @State var searchText = ""
+    @State var statusMessage = ""
+    @State var confirmsReplay = false
 
     private var detailSections: [(String, String)] {
         var sections: [(String, String)] = [
@@ -967,7 +963,7 @@ private struct DebugSwiftNetworkRequestDetail: View {
     }
 }
 
-private struct DebugSwiftNetworkKeyValue: View {
+struct DebugSwiftNetworkKeyValue: View {
     let title: String
     let value: String
 

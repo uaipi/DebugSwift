@@ -21,16 +21,10 @@ let package = Package(
             name: "DebugSwiftUI",
             type: .dynamic,
             targets: ["DebugSwiftUI"]
-        ),
-        .library(
-            name: "DebugSwiftAndroid",
-            type: .dynamic,
-            targets: ["DebugSwiftAndroid"]
         )
     ],
     dependencies: [
         .package(url: "https://github.com/skiptools/skip.git", from: "1.9.11"),
-        .package(url: "https://github.com/skiptools/skip-ui.git", from: "1.60.0"),
         .package(url: "https://source.skip.tools/skip-fuse.git", from: "1.0.0"),
         .package(url: "https://source.skip.tools/skip-fuse-ui.git", from: "1.0.0")
     ],
@@ -46,7 +40,8 @@ let package = Package(
             dependencies: [
                 "DebugSwiftCore",
                 .product(name: "SkipFuse", package: "skip-fuse"),
-                .product(name: "SkipFuseUI", package: "skip-fuse-ui")
+                .product(name: "SkipFuseUI", package: "skip-fuse-ui"),
+                .target(name: "DebugSwift", condition: .when(platforms: [.iOS]))
             ],
             path: "DebugSwiftUI/Sources/DebugSwiftUI",
             plugins: [
@@ -64,17 +59,6 @@ let package = Package(
             path: "DebugSwift",
             resources: [
                 .process("Resources")
-            ]
-        ),
-        .target(
-            name: "DebugSwiftAndroid",
-            dependencies: [
-                .product(name: "SkipUI", package: "skip-ui"),
-                .target(name: "DebugSwift", condition: .when(platforms: [.iOS]))
-            ],
-            path: "DebugSwiftAndroid/Sources/DebugSwiftAndroid",
-            plugins: [
-                .plugin(name: "skipstone", package: "skip")
             ]
         )
     ],
