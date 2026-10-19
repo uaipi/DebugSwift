@@ -12,6 +12,33 @@ object DebugSwiftNativeBridge {
         return true
     }
 
+    /**
+     * Adds a request that a Swift networking stack finished. Swift's URLSession does not go through
+     * OkHttp, so Swift hands each completed exchange over as JSON and every network tool covers it.
+     */
+    @JvmStatic
+    fun recordExternalNetwork(json: String) {
+        val record = org.json.JSONObject(json)
+        fun headers(key: String): Map<String, List<String>> {
+            val object_ = record.optJSONObject(key) ?: return emptyMap()
+            return object_.keys().asSequence().associateWith { listOf(object_.optString(it)) }
+        }
+        AndroidDebugTools.recordNetwork(
+            method = record.optString("method"),
+            url = record.optString("url"),
+            status = record.optInt("status"),
+            durationMs = record.optLong("durationMs"),
+            requestBytes = record.optLong("requestBytes"),
+            responseBytes = record.optLong("responseBytes"),
+            requestBody = record.optString("requestBody"),
+            responseBody = record.optString("responseBody"),
+            error = record.optString("error"),
+            requestHeaders = headers("requestHeaders"),
+            responseHeaders = headers("responseHeaders"),
+            source = "http"
+        )
+    }
+
     @JvmStatic
     fun snapshot(featureID: String): String = AndroidDebugTools.snapshot(featureID)
 

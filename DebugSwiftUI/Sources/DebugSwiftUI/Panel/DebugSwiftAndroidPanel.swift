@@ -1128,7 +1128,9 @@ public enum DebugSwiftAndroidRuntime {
     @discardableResult
     public static func install() -> Bool {
         #if os(Android)
-        return DebugSwiftNativeBridge.install()
+        let installed = DebugSwiftNativeBridge.install()
+        DebugSwiftNetworkForwarder.start()
+        return installed
         #else
         return false
         #endif
