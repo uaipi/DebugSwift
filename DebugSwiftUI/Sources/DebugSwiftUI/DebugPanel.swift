@@ -41,18 +41,21 @@ public struct DebugPanel: View {
                             Text(verbatim: "Network inspector")
                         }
                     }
-                    if DebugAndroidTools.isAvailable {
-                        NavigationLink {
-                            AndroidToolSnapshotView(featureID: "device_info", title: "Device info")
-                        } label: {
-                            Text(verbatim: "Device info")
-                        }
-                    }
                     ForEach(tools) { tool in
                         NavigationLink {
                             tool.makeContent()
                         } label: {
                             DebugToolRow(tool: tool)
+                        }
+                    }
+                }
+                Section {
+                    ForEach(DebugSwiftArea.allCases) { area in
+                        NavigationLink {
+                            DebugSwiftFeatureList(area: area)
+                                .navigationTitle(area.title)
+                        } label: {
+                            Text(area.title)
                         }
                     }
                 }
@@ -72,6 +75,7 @@ public struct DebugPanel: View {
                 }
             }
             .navigationTitle(title)
+            .task { DebugSwiftAndroidRuntime.install() }
             .toolbar {
                 if let onDone {
                     ToolbarItem(placement: .confirmationAction) {

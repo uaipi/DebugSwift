@@ -1122,6 +1122,18 @@ public enum DebugSwiftAndroidRuntime {
     }
     #endif
 
+    /// Starts the Android runtime (crash and ANR capture, frame monitor, network history). Call it once
+    /// at launch from the host app; opening the panel installs it too, so it is safe to call twice.
+    /// Does nothing on iOS, where `DebugSwift().setup()` plays this role.
+    @discardableResult
+    public static func install() -> Bool {
+        #if os(Android)
+        return DebugSwiftNativeBridge.install()
+        #else
+        return false
+        #endif
+    }
+
     public static func log(_ message: String) {
         #if os(Android)
         DebugSwiftNativeBridge.log(message)
