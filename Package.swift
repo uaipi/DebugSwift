@@ -31,6 +31,7 @@ let package = Package(
     dependencies: [
         .package(url: "https://github.com/skiptools/skip.git", from: "1.9.11"),
         .package(url: "https://github.com/skiptools/skip-ui.git", from: "1.60.0"),
+        .package(url: "https://source.skip.tools/skip-fuse.git", from: "1.0.0"),
         .package(url: "https://source.skip.tools/skip-fuse-ui.git", from: "1.0.0")
     ],
     targets: [
@@ -44,6 +45,7 @@ let package = Package(
             name: "DebugSwiftUI",
             dependencies: [
                 "DebugSwiftCore",
+                .product(name: "SkipFuse", package: "skip-fuse"),
                 .product(name: "SkipFuseUI", package: "skip-fuse-ui")
             ],
             path: "DebugSwiftUI/Sources/DebugSwiftUI",

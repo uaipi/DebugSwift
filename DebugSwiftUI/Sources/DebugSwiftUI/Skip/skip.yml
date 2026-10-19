@@ -1,6 +1,15 @@
 # Configuration file for Skip (https://skip.dev) project
 #
-# Native (Skip Fuse) module: the same SwiftUI debug panel runs on iOS and Android.
+# Native (Skip Fuse) module: the same SwiftUI debug panel runs on iOS and Android. The Kotlin in
+# this module's Skip folder holds the Android tools that have no Swift equivalent.
 skip:
   mode: 'native'
   package: 'debug.swift.ui'
+
+build:
+  contents:
+    - block: 'dependencies'
+      contents:
+        - 'implementation("com.squareup.okhttp3:okhttp:4.12.0")'
+        - 'implementation("androidx.appcompat:appcompat:1.7.0")'
+        - 'implementation("androidx.core:core-ktx:1.15.0")'

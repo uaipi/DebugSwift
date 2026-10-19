@@ -1,7 +1,17 @@
 package debug.swift.android
 
-/** Kotlin calls used by SwiftUI code transpiled into Kotlin with Skip Lite. */
+/** Static entry points the native Swift panel reaches through JNI. */
 object DebugSwiftNativeBridge {
+    /** Installs the runtime from the running process, so a Skip Fuse host needs no Kotlin glue. */
+    @JvmStatic
+    fun installFromProcess(): Boolean {
+        val application = runCatching {
+            Class.forName("android.app.ActivityThread").getMethod("currentApplication").invoke(null)
+        }.getOrNull() as? android.app.Application ?: return false
+        AndroidDebugTools.install(application)
+        return true
+    }
+
     @JvmStatic
     fun snapshot(featureID: String): String = AndroidDebugTools.snapshot(featureID)
 
