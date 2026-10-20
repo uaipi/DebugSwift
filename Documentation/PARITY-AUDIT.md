@@ -51,15 +51,16 @@ screens, not missing features.
 3. **Network injection cannot touch Swift networking.** Fixed; the host wraps its transport call in `NetworkInjection.apply`.
 4. **A saved rewrite rule with no method never matched after a restart** (org.json read a JSON null as the string "null"). Fixed.
 5. **Frames per second reads 0 on an idle screen**, because the Choreographer only counts frames that draw. Left as is.
-6. **The earlier notes below describe the state before these fixes.** On iOS a URLProtocol applies delay, failure and
-   rewrite rules. On Android the rules are applied only by the OkHttp interceptor.
 
-## Data plumbing (first, because every Network screen depends on it)
+Before the fix, injection rules were applied only by the OkHttp interceptor; on iOS a URL protocol
+applies them to every session.
 
-Feed completed `DebugSwiftCore.NetworkRecord`s into the Kotlin network store over JNI, so the
-inspector, GraphQL, HAR, history and thresholds cover Swift traffic as well as OkHttp. Apply the Core
-injection config to Swift requests through the same JNI path. After this, the older Core inspector
-duplicates the Kotlin one and can be retired.
+## Data plumbing (done)
+
+Completed `DebugSwiftCore.NetworkRecord`s are fed into the Kotlin network store over JNI, so the
+inspector, GraphQL, HAR, history and thresholds cover Swift traffic as well as OkHttp. The injection
+rules reach Swift requests through the same path. The older Core inspector now duplicates the Kotlin
+one and can be retired.
 
 ## Area by area
 
