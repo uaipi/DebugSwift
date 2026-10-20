@@ -85,7 +85,7 @@ public enum NetworkInjection {
     /// decision the real call runs untouched.
     public static func apply(
         to request: URLRequest,
-        perform: (URLRequest) async throws -> (Data, URLResponse),
+        perform: @Sendable (URLRequest) async throws -> (Data, URLResponse),
     ) async throws -> (Data, URLResponse) {
         guard let provider = storage.current,
               let url = request.url,
@@ -101,7 +101,7 @@ public enum NetworkInjection {
         _ decision: NetworkInjectionDecision,
         for request: URLRequest,
         url: URL,
-        perform: (URLRequest) async throws -> (Data, URLResponse),
+        perform: @Sendable (URLRequest) async throws -> (Data, URLResponse),
     ) async throws -> (Data, URLResponse) {
         if decision.delaySeconds > 0 {
             try await Task.sleep(nanoseconds: UInt64(min(decision.delaySeconds, 60) * 1_000_000_000))

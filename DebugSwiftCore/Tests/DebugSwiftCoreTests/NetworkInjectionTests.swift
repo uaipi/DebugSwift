@@ -7,7 +7,7 @@ import Testing
 
     private func request() -> URLRequest { URLRequest(url: url) }
 
-    private func real(_ status: Int = 200, body: String = "real") -> (URLRequest) async throws -> (Data, URLResponse) {
+    private func real(_ status: Int = 200, body: String = "real") -> @Sendable (URLRequest) async throws -> (Data, URLResponse) {
         { request in
             let response = HTTPURLResponse(url: request.url!, statusCode: status, httpVersion: nil, headerFields: ["X-Real": "1"])!
             return (Data(body.utf8), response)

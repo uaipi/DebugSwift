@@ -39,6 +39,38 @@ object DebugSwiftNativeBridge {
         )
     }
 
+    /**
+     * What the injection rules want done to one request, as JSON for a Swift transport to carry out.
+     * Same order as the OkHttp interceptor: delay, block, failure, then response rewrite. A failure
+     * is consumed here, so ask once per request.
+     */
+    @JvmStatic
+    fun injectionDecision(url: String, method: String): String {
+        val decision = org.json.JSONObject()
+        decision.put("delaySeconds", AndroidDebugTools.requestDelay(url, method) / 1000.0)
+        val blocked = AndroidDebugTools.shouldBlock(url)
+        decision.put("isBlocked", blocked)
+        if (!blocked) {
+            AndroidDebugTools.consumeNetworkFailure(url, method)?.let { failure ->
+                decision.put("failure", org.json.JSONObject()
+                    .put("kind", failure.failureType)
+                    .put("statusCode", failure.statusCode ?: org.json.JSONObject.NULL)
+                    .put("domain", failure.customDomain)
+                    .put("code", failure.customCode)
+                    .put("message", failure.customDescription))
+            }
+            if (!decision.has("failure")) {
+                AndroidDebugTools.matchingNetworkRewriteRule(url, method)?.let { rule ->
+                    decision.put("rewrite", org.json.JSONObject()
+                        .put("statusCode", rule.responseStatusCode ?: org.json.JSONObject.NULL)
+                        .put("body", rule.responseBody)
+                        .put("shortCircuit", AndroidDebugTools.shouldShortCircuitResponseRewrite()))
+                }
+            }
+        }
+        return decision.toString()
+    }
+
     @JvmStatic
     fun snapshot(featureID: String): String = AndroidDebugTools.snapshot(featureID)
 

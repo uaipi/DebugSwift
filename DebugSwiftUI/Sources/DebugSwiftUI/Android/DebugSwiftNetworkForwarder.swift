@@ -43,6 +43,13 @@ enum DebugSwiftNetworkForwarder {
 
         static func start() {
             _ = task
+            // Rules set in the Android tools apply to Swift requests the host sends through
+            // `NetworkInjection.apply`.
+            NetworkInjection.install { url, method in
+                let json = DebugSwiftNativeBridge.injectionDecision(url, method)
+                guard let data = json.data(using: .utf8) else { return nil }
+                return try? JSONDecoder().decode(NetworkInjectionDecision.self, from: data)
+            }
         }
 
         private static func forward(_ record: NetworkRecord) {

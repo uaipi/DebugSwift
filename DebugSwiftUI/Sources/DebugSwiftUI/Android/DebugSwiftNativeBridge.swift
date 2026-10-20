@@ -26,6 +26,8 @@ enum DebugSwiftNativeBridge {
         }
     }
 
+    static func injectionDecision(_ url: String, _ method: String) -> String { string("injectionDecision", url, method) }
+
     static func snapshot(_ featureID: String) -> String { string("snapshot", featureID) }
     static func securityAuditSnapshot() -> String { string("securityAuditSnapshot") }
     static func networkInspectorSnapshot(_ featureID: String) -> String { string("networkInspectorSnapshot", featureID) }
