@@ -346,6 +346,10 @@ struct DebugSwiftFeatureDestination: View {
             DebugCustomActionsView()
         } else if feature.id == "event_bus" {
             DebugLinesView(featureID: feature.id, title: feature.title)
+        } else if feature.id == "compose_renders" {
+            DebugComposeRendersView()
+        } else if feature.id == "doc_recorder" {
+            DebugDocRecorderView()
         } else if feature.id == "files" {
             DebugFilesView(path: "")
         } else if feature.id == "preferences" || feature.id == "persistent_data" {
@@ -1184,6 +1188,7 @@ public enum DebugSwiftAndroidRuntime {
         #if os(Android)
         let installed = DebugSwiftNativeBridge.install()
         DebugSwiftNetworkForwarder.start()
+        Task { @MainActor in DebugFloatingButton.startListening() }
         return installed
         #else
         return false

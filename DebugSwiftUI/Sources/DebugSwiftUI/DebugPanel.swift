@@ -59,6 +59,11 @@ public struct DebugPanel: View {
                         }
                     }
                 }
+                #if os(Android)
+                    Section {
+                        DebugFloatingButtonToggle()
+                    }
+                #endif
                 ForEach(actions) { group in
                     Section(group.title) {
                         ForEach(group.actions) { action in

@@ -30,6 +30,28 @@ enum DebugSwiftNativeBridge {
 
     static func resource(_ operation: String, _ arguments: String) -> String { string("resource", operation, arguments) }
 
+    static func floatingButtonEnabled() -> Bool {
+        withMethod("floatingButtonEnabled", signature: "()Z") { javaClass, id in
+            let enabled: Bool = try javaClass.callStatic(method: id, options: [], args: [])
+            return enabled
+        } ?? false
+    }
+
+    static func setFloatingButtonEnabled(_ enabled: Bool) {
+        _ = withMethod("setFloatingButtonEnabled", signature: "(Z)V") { javaClass, id in
+            try javaClass.callStatic(method: id, options: [], args: [enabled.toJavaParameter(options: [])])
+            return true
+        }
+    }
+
+    /// True once per tap on the floating button since the last call.
+    static func consumeFloatingButtonTap() -> Bool {
+        withMethod("consumeFloatingButtonTap", signature: "()Z") { javaClass, id in
+            let tapped: Bool = try javaClass.callStatic(method: id, options: [], args: [])
+            return tapped
+        } ?? false
+    }
+
     static func snapshot(_ featureID: String) -> String { string("snapshot", featureID) }
     static func securityAuditSnapshot() -> String { string("securityAuditSnapshot") }
     static func networkInspectorSnapshot(_ featureID: String) -> String { string("networkInspectorSnapshot", featureID) }
