@@ -22,11 +22,10 @@ it does not say each button does what the iOS one does.
 | Network | 9 | 9 | 9 | 0 | none known |
 | Performance | 11 | 11 | 11 | 0 | none known; the rates on the Disk screen are process wide |
 | Interface | 9 | 10 | 10 | 0 | no 3D view debugger |
-| Resources | 9 | 10 | 6 | 4 | realm browser (needs host registry) |
-| App | 13 | 13 | 8 | 5 | push simulator, push token, installed libraries, agent debug log |
+| Resources | 9 | 10 | 10 | 0 | the Realm browser shows only what the host registers, since Realm lives on the JVM |
+| App | 13 | 13 | 13 | 0 | none known |
 
-Android has 53 entries. The generic ones left are the push simulator, the push token, installed
-libraries, the agent debug log and the Realm browser.
+Android has 53 entries and every one has a dedicated screen.
 
 ## Done so far (verified on an Android 17 emulator)
 
@@ -41,6 +40,11 @@ libraries, the agent debug log and the Realm browser.
   thread stalls with the stack the thread was stuck in, ANR reports, backtraces of the main thread or
   all threads, retained Activities with a GC recheck, StrictMode violations, memory warning
   simulation and the on-screen widget.
+- Push: a simulator that posts real notifications (scenarios, templates, behavior options, a live
+  history with per-entry actions), and the registration token with a copy button; Voltrace reports
+  its Firebase token to it.
+- Installed libraries from the process maps and from the APK, the agent debug log with capture on and
+  off and the newest entries, and the Realm browser for what the host registers.
 - Floating debug button: a draggable button over the app that opens the panel. The setting and the
   position are remembered, and taps on it are kept out of the recorded gestures.
 - Interface: a window tree with Android views and Compose semantics (text, description, test tag,
@@ -128,10 +132,10 @@ one and can be retired.
 | crashes | Generic | list and detail, fix defect 1 |
 | oslog_console (Logcat) | Generic | filterable list |
 | device_info, push_token, custom_info, custom_actions | Generic | simple lists. Host custom actions already have a native Swift route through `DebugTool` and `DebugActionGroup` in the panel |
-| push_simulator | Generic | permission, templates, history screens |
+| push_simulator | Dedicated | permission, send, scenarios, templates, behavior options and history |
 | deep_links | Generic, Gap | add an opener: type a URI and fire the intent |
 | location | Generic, Gap | iOS can simulate locations; add mock location via the Android test provider |
-| loaded_libraries, event_bus, agent_debug_log | Generic | lists |
+| loaded_libraries, event_bus, agent_debug_log | Dedicated | mapped files, packed native libraries, capture state and newest entries |
 
 ### Outside the feature IDs
 
