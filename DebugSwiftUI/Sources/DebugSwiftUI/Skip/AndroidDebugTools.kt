@@ -2754,6 +2754,59 @@ object AndroidDebugTools {
             .toString()
     }
 
+    /** Structured state for the Push Notifications screen. */
+    fun pushStateJSON(): String {
+        val context = appContext ?: return JSONObject().put("error", "Android runtime has not been installed.").toString()
+        val permission = when {
+            Build.VERSION.SDK_INT >= 33 && context.checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) != android.content.pm.PackageManager.PERMISSION_GRANTED -> "Not granted"
+            !androidNotificationSettingsLoaded -> "Checking"
+            androidNotificationsEnabled -> "Allowed"
+            else -> "Disabled in system settings"
+        }
+        fun userInfo(map: Map<String, String>) = JSONObject().also { json -> map.forEach { (key, value) -> json.put(key, value) } }
+        val templates = JSONArray()
+        pushTemplates.forEach {
+            templates.put(
+                JSONObject().put("name", it.name).put("title", it.title).put("body", it.body)
+                    .put("subtitle", it.subtitle ?: JSONObject.NULL).put("isDefault", it.isDefault)
+            )
+        }
+        val history = JSONArray()
+        pushHistory.toList().take(100).forEach {
+            history.put(
+                JSONObject().put("id", it.id).put("title", it.title).put("body", it.body)
+                    .put("subtitle", it.subtitle ?: JSONObject.NULL).put("badge", it.badge ?: JSONObject.NULL)
+                    .put("sound", it.sound ?: JSONObject.NULL).put("status", it.status).put("trigger", it.trigger)
+                    .put("scheduledMs", it.scheduledAtMs).put("deliveredMs", it.deliveryAtMs ?: JSONObject.NULL)
+                    .put("interaction", it.interactionType ?: JSONObject.NULL).put("userInfo", userInfo(it.userInfo))
+            )
+        }
+        return JSONObject()
+            .put("enabled", pushEnabled).put("permission", permission).put("channel", NOTIFICATION_CHANNEL)
+            .put("showInForeground", pushShowInForeground).put("playSound", pushPlaySound).put("showBadge", pushShowBadge)
+            .put("autoInteraction", pushAutoInteraction).put("interactionDelay", pushInteractionDelaySeconds)
+            .put("simulateRealPush", pushSimulateRealPush).put("maxHistory", pushMaxHistoryCount)
+            .put("templates", templates).put("history", history).toString()
+    }
+
+    fun pushTokenValue(): String = pushToken
+
+    /** Structured state for the Agent Debug Log screen: capture state, file and the latest entries. */
+    fun agentLogStateJSON(): String {
+        val context = appContext ?: return JSONObject().put("error", "Android runtime has not been installed.").toString()
+        val file = File(context.filesDir, AGENT_LOG_FILENAME)
+        val entries = JSONArray()
+        runCatching { file.readLines(Charsets.UTF_8).takeLast(80).asReversed() }.getOrDefault(emptyList()).forEach { line ->
+            val entry = runCatching { JSONObject(line) }.getOrNull() ?: return@forEach
+            entries.put(
+                JSONObject().put("time", entry.optLong("timestamp")).put("kind", entry.optString("kind"))
+                    .put("location", entry.optString("location")).put("message", entry.optString("message"))
+            )
+        }
+        return JSONObject().put("enabled", agentLogEnabled).put("session", agentLogSessionID).put("path", file.absolutePath)
+            .put("size", if (file.exists()) file.length() else 0L).put("entries", entries).toString()
+    }
+
     /** Structured data for one Performance screen: frames, hangs, backtraces, leaks, threads, supercalls, memory. */
     fun performanceDetailJSON(kind: String): String {
         val context = appContext ?: return JSONObject().put("error", "Android runtime has not been installed.").toString()

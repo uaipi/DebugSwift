@@ -46,6 +46,11 @@ object DebugSwiftAppAPI {
                 "app.doc.record" -> JSONObject().also { AndroidDebugTools.setDocumentationRecording(args.optString("on") == "true") }
                 "app.doc.capture" -> JSONObject().put("message", AndroidDebugTools.captureDocumentationScreenshot())
                 "app.doc.clear" -> JSONObject().also { AndroidDebugTools.clearDocumentation() }
+                "app.push.state" -> JSONObject(AndroidDebugTools.pushStateJSON())
+                "app.push.token" -> JSONObject().put("token", AndroidDebugTools.pushTokenValue())
+                "app.agentlog.state" -> JSONObject(AndroidDebugTools.agentLogStateJSON())
+                "app.realm" -> realm()
+                "app.libraries" -> libraries(context)
                 "app.crashes" -> crashes(context)
                 "app.logcat" -> logcat(args.optString("filter"), args.optString("level"))
                 "app.deeplink.open" -> openDeepLink(context, args.optString("uri"))
@@ -71,6 +76,65 @@ object DebugSwiftAppAPI {
         }
         DebugSwiftViewInspector.highlight(parsed)
         return JSONObject().put("count", parsed.size)
+    }
+
+    // MARK: Realm
+
+    private fun realm(): JSONObject {
+        val providers = JSONArray()
+        DebugSwiftRealmRegistry.entries().forEach { (name, snapshot) ->
+            providers.put(JSONObject().put("name", name).put("snapshot", snapshot))
+        }
+        return JSONObject().put("providers", providers)
+    }
+
+    // MARK: Libraries
+
+    /** The app's code and native libraries, read from the files this process has mapped. */
+    private fun libraries(context: Context): JSONObject {
+        val sizes = LinkedHashMap<String, Long>()
+        runCatching {
+            java.io.File("/proc/self/maps").forEachLine { line ->
+                val parts = line.trim().split(Regex("\\s+"), limit = 6)
+                if (parts.size < 6) return@forEachLine
+                val path = parts[5]
+                if (!path.startsWith("/") || !(path.endsWith(".so") || path.endsWith(".dex") || path.endsWith(".odex") || path.endsWith(".vdex") || path.endsWith(".apk") || path.endsWith(".oat") || path.endsWith(".jar"))) return@forEachLine
+                val range = parts[0].split('-')
+                if (range.size == 2) sizes[path] = (sizes[path] ?: 0L) + (range[1].toLong(16) - range[0].toLong(16))
+            }
+        }
+        val appInfo = context.applicationInfo
+        val libraries = JSONArray()
+        sizes.entries.sortedByDescending { it.value }.forEach { (path, size) ->
+            val origin = when {
+                path.startsWith(appInfo.sourceDir.substringBeforeLast('/')) || path.contains(context.packageName) -> "App"
+                path.startsWith("/system") || path.startsWith("/apex") || path.startsWith("/vendor") -> "System"
+                else -> "Other"
+            }
+            libraries.put(JSONObject().put("path", path).put("name", path.substringAfterLast('/')).put("size", size).put("origin", origin))
+        }
+        // Android loads the app's native libraries straight from the APK, so the maps show only the APK.
+        // Read the libraries packed for this device's main ABI from the APK itself.
+        val packed = JSONArray()
+        val abi = Build.SUPPORTED_ABIS.firstOrNull().orEmpty()
+        runCatching {
+            java.util.zip.ZipFile(appInfo.sourceDir).use { zip ->
+                zip.entries().asSequence()
+                    .filter { it.name.startsWith("lib/$abi/") && it.name.endsWith(".so") }
+                    .sortedByDescending { it.size }
+                    .forEach { packed.put(JSONObject().put("name", it.name.substringAfterLast('/')).put("size", it.size)) }
+            }
+        }
+        return JSONObject()
+            .put("appLibraries", packed)
+            .put("packageName", context.packageName)
+            .put("abis", Build.SUPPORTED_ABIS.joinToString())
+            .put("nativeDirectory", appInfo.nativeLibraryDir)
+            .put("sourceDirectory", appInfo.sourceDir)
+            .put("splits", JSONArray(appInfo.splitSourceDirs?.toList().orEmpty()))
+            .put("classLoader", context.classLoader.javaClass.name)
+            .put("nativeHeap", android.os.Debug.getNativeHeapAllocatedSize())
+            .put("libraries", libraries)
     }
 
     // MARK: Crashes

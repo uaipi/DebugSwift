@@ -72,6 +72,11 @@ object DebugSwiftRealmRegistry {
         synchronized(providers) { providers[name] = snapshotProvider }
     }
 
+    /** Each registered provider with what it reports now. */
+    fun entries(): List<Pair<String, String>> = synchronized(providers) {
+        providers.entries.map { (name, provider) -> name to runCatching(provider).getOrElse { "Provider failed: ${it.message}" } }
+    }
+
     fun snapshot(): String = synchronized(providers) {
         providers.entries.joinToString("\n\n") { (name, provider) ->
             "$name\n${runCatching(provider).getOrElse { "Provider failed: ${it.message}" }}"

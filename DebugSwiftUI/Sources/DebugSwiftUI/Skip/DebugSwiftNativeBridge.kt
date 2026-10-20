@@ -89,6 +89,12 @@ object DebugSwiftNativeBridge {
     @JvmStatic
     fun consumeFloatingButtonTap(): Boolean = DebugSwiftFloatingButton.consumeTap()
 
+    /** Hands the app's FCM registration token to the Push Token screen. */
+    @JvmStatic
+    fun reportPushToken(token: String) {
+        AndroidDebugTools.reportPushToken(token)
+    }
+
     @JvmStatic
     fun snapshot(featureID: String): String = AndroidDebugTools.snapshot(featureID)
 
