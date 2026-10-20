@@ -348,6 +348,7 @@ object AndroidDebugTools {
         loadNetworkHistory(applicationContext)
         loadCrashHistory(applicationContext)
         registerLifecycleCallbacks(applicationContext)
+        seedForegroundActivity()
         installCrashHandler()
         startAnrWatchdog()
         startFrameMonitor()
@@ -358,6 +359,9 @@ object AndroidDebugTools {
 
     /** Saved uncaught-exception reports, newest first. */
     fun crashReportsNewestFirst(): List<String> = crashRecords.toList().asReversed()
+
+    /** The Activity in front, for tools that inspect or draw over the window. */
+    fun foregroundActivityOrNull(): Activity? = foregroundActivity.get()
 
     /** The installed application context, for tools that live outside this object. */
     fun contextOrNull(): Context? = appContext
@@ -378,6 +382,29 @@ object AndroidDebugTools {
     /** Any app preference store can be edited; DebugSwift's own state cannot. */
     private fun isEditablePreferenceStore(context: Context, name: String): Boolean =
         name.isNotBlank() && !isDebugSwiftPreferenceStore(name) && name in preferenceStoreNames(context)
+
+    /**
+     * The lifecycle callbacks only report Activities that resume after they are registered. When the
+     * runtime starts after the first screen is already up, look the resumed Activity up directly.
+     * Best effort: it reads framework internals, and does nothing if the platform hides them.
+     */
+    private fun seedForegroundActivity() {
+        if (foregroundActivity.get() != null) return
+        runCatching {
+            val threadClass = Class.forName("android.app.ActivityThread")
+            val thread = threadClass.getMethod("currentActivityThread").invoke(null)
+            val records = (threadClass.getDeclaredField("mActivities").apply { isAccessible = true }.get(thread) as Map<*, *>).values
+            for (record in records) {
+                val recordClass = record?.javaClass ?: continue
+                val paused = recordClass.getDeclaredField("paused").apply { isAccessible = true }.getBoolean(record)
+                val activity = recordClass.getDeclaredField("activity").apply { isAccessible = true }.get(record) as? Activity
+                if (!paused && activity != null) {
+                    foregroundActivity = WeakReference(activity)
+                    return
+                }
+            }
+        }
+    }
 
     fun registerPreferences(name: String) {
         if (name.isNotBlank() && name != PREFS && name !in registeredPreferences) {

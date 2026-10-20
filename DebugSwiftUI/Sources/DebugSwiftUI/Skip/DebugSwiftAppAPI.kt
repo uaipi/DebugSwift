@@ -29,6 +29,12 @@ object DebugSwiftAppAPI {
         return try {
             when (operation) {
                 "app.perf.sample" -> JSONObject(AndroidDebugTools.performanceSampleJSON())
+                "app.ui.tree" -> DebugSwiftViewInspector.tree()
+                "app.ui.highlight" -> highlight(args.optString("rects"))
+                "app.ui.clearHighlight" -> JSONObject().also { DebugSwiftViewInspector.clearHighlight() }
+                "app.ui.palette" -> DebugSwiftPalette.capture()
+                "app.animation.get" -> DebugSwiftAnimations.state(context)
+                "app.animation.set" -> DebugSwiftAnimations.set(context, args.optDouble("scale", 1.0).toFloat())
                 "app.crashes" -> crashes(context)
                 "app.logcat" -> logcat(args.optString("filter"), args.optString("level"))
                 "app.deeplink.open" -> openDeepLink(context, args.optString("uri"))
@@ -43,6 +49,18 @@ object DebugSwiftAppAPI {
     }
 
     private fun failure(message: String) = JSONObject().put("error", message)
+
+    // MARK: View inspector
+
+    /** "l,t,r,b;l,t,r,b" in window pixels. */
+    private fun highlight(rects: String): JSONObject {
+        val parsed = rects.split(';').mapNotNull { entry ->
+            val parts = entry.split(',').mapNotNull { it.trim().toIntOrNull() }
+            if (parts.size == 4) android.graphics.Rect(parts[0], parts[1], parts[2], parts[3]) else null
+        }
+        DebugSwiftViewInspector.highlight(parsed)
+        return JSONObject().put("count", parsed.size)
+    }
 
     // MARK: Crashes
 
