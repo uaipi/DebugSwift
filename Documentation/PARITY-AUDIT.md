@@ -20,12 +20,12 @@ it does not say each button does what the iOS one does.
 | Area | iOS entries | Android entries | Dedicated | Generic | Capability gaps |
 | --- | --- | --- | --- | --- | --- |
 | Network | 9 | 9 | 9 | 0 | none known |
-| Performance | 11 | 11 | 3 | 8 | frame drops, hangs, backtraces, leaks, thread checker, super calls, memory warning, widget settings |
+| Performance | 11 | 11 | 11 | 0 | none known; the rates on the Disk screen are process wide |
 | Interface | 9 | 10 | 8 | 2 | compose render tracking and the documentation recorder are still text screens; no 3D view debugger |
 | Resources | 9 | 10 | 6 | 4 | realm browser (needs host registry) |
 | App | 13 | 13 | 8 | 5 | push simulator, push token, installed libraries, agent debug log |
 
-Android has 53 entries, 34 of them dedicated and 19 generic. Almost all the gap is the generic
+Android has 53 entries, 45 of them dedicated and 8 generic. Almost all the gap is the generic
 screens, not missing features.
 
 ## Done so far (verified on an Android 17 emulator)
@@ -37,7 +37,10 @@ screens, not missing features.
 - App: crash reports and process exits (no more binary dump), filterable Logcat, deep link opener,
   mock location (confirmed at the OS level on the GPS, network and fused providers), device info,
   custom info and actions, event timeline.
-- Performance: live CPU, memory and frame charts, battery, disk throughput.
+- Performance: live CPU, memory and frame charts, battery, disk throughput, slow frame timeline, main
+  thread stalls with the stack the thread was stuck in, ANR reports, backtraces of the main thread or
+  all threads, retained Activities with a GC recheck, StrictMode violations, memory warning
+  simulation and the on-screen widget.
 - Interface: a window tree with Android views and Compose semantics (text, description, test tag,
   clicks), a highlight drawn in the app, a measurement tool that gives the gap between two
   elements, a color palette sampled from the screen, and the system animation scales.
@@ -53,7 +56,8 @@ screens, not missing features.
    Core-based inspector (`NetworkInspectorView`) does see that traffic.
 3. **Network injection cannot touch Swift networking.** Fixed; the host wraps its transport call in `NetworkInjection.apply`.
 4. **A saved rewrite rule with no method never matched after a restart** (org.json read a JSON null as the string "null"). Fixed.
-5. **Frames per second reads 0 on an idle screen**, because the Choreographer only counts frames that draw. Left as is.
+5. **The hang detector sampled the wrong stack.** It read the main thread after the thread had recovered, so every stall pointed at the detector itself. Fixed: the stack is sampled while the thread is still stuck.
+6. **Frames per second reads 0 on an idle screen**, because the Choreographer only counts frames that draw. Left as is.
 
 Before the fix, injection rules were applied only by the OkHttp interceptor; on iOS a URL protocol
 applies them to every session.
@@ -77,17 +81,17 @@ one and can be retired.
 | network_thresholds | Dedicated | count Swift requests |
 | network_history | Dedicated | persist Swift records |
 
-### Performance (all generic)
+### Performance (all dedicated)
 
-| Feature | iOS | Android today | Plan |
-| --- | --- | --- | --- |
-| performance_overview | live CPU, memory, FPS charts | text snapshot | SwiftUI `Path` charts fed by a polled snapshot |
-| performance_widget | floating metrics | Kotlin overlay | keep Kotlin overlay, add a settings screen |
-| battery | level, state, history | instant reading | history list and charts |
-| disk | storage size, I/O rates, open descriptors | size and byte counters | rates series, descriptor list |
-| memory_warning | trigger and inspect | text and button | result list |
-| frame_drops, hangs, backtraces | timeline and stack browser | text | list plus detail screens |
-| leaks, thread_checker, super_calls | lists with detail | text | list plus detail screens |
+| Feature | Rating | Notes |
+| --- | --- | --- |
+| performance_overview, battery, disk | Dedicated | live charts; battery and disk keep history only while the screen is open |
+| frame_drops | Dedicated | summary, sparkline and a timeline of slow frames. Reads 0 fps on an idle screen |
+| hangs | Dedicated | stalls with the stack sampled while the main thread was stuck, plus Android ANR reports |
+| backtraces | Dedicated | main thread or all threads |
+| leaks | Dedicated | reachability heuristic with a GC recheck; confirm with the Memory Profiler |
+| thread_checker | Dedicated | StrictMode on or off and the recorded violations |
+| super_calls, memory_warning, performance_widget | Dedicated | |
 
 ### Interface
 
