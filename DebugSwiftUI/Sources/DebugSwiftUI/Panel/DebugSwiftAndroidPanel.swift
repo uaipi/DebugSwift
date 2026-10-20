@@ -302,7 +302,13 @@ struct DebugSwiftFeatureDestination: View {
             DebugSwiftFeatureDetail(feature: feature)
         }
         #else
-        if feature.id == "crashes" {
+        if feature.id == "performance_overview" {
+            DebugLiveMetricsView()
+        } else if feature.id == "battery" {
+            DebugBatteryView()
+        } else if feature.id == "disk" {
+            DebugDiskView()
+        } else if feature.id == "crashes" {
             DebugCrashesView()
         } else if feature.id == "oslog_console" {
             DebugLogcatView()
