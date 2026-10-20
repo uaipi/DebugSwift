@@ -21,12 +21,12 @@ it does not say each button does what the iOS one does.
 | --- | --- | --- | --- | --- | --- |
 | Network | 9 | 9 | 9 | 0 | none known |
 | Performance | 11 | 11 | 11 | 0 | none known; the rates on the Disk screen are process wide |
-| Interface | 9 | 10 | 8 | 2 | compose render tracking and the documentation recorder are still text screens; no 3D view debugger |
+| Interface | 9 | 10 | 10 | 0 | no 3D view debugger |
 | Resources | 9 | 10 | 6 | 4 | realm browser (needs host registry) |
 | App | 13 | 13 | 8 | 5 | push simulator, push token, installed libraries, agent debug log |
 
-Android has 53 entries, 45 of them dedicated and 8 generic. Almost all the gap is the generic
-screens, not missing features.
+Android has 53 entries. The generic ones left are the push simulator, the push token, installed
+libraries, the agent debug log and the Realm browser.
 
 ## Done so far (verified on an Android 17 emulator)
 
@@ -41,9 +41,13 @@ screens, not missing features.
   thread stalls with the stack the thread was stuck in, ANR reports, backtraces of the main thread or
   all threads, retained Activities with a GC recheck, StrictMode violations, memory warning
   simulation and the on-screen widget.
+- Floating debug button: a draggable button over the app that opens the panel. The setting and the
+  position are remembered, and taps on it are kept out of the recorded gestures.
 - Interface: a window tree with Android views and Compose semantics (text, description, test tag,
   clicks), a highlight drawn in the app, a measurement tool that gives the gap between two
-  elements, a color palette sampled from the screen, and the system animation scales.
+  elements, a color palette sampled from the screen, the system animation scales, a live
+  recomposition rate for Compose that needs no wrapper in the host's UI, and the documentation
+  recorder (taps and scrolls are captured by the library itself, and the screenshot is a pixel copy).
 
 ## Known defects found while testing
 
@@ -102,8 +106,8 @@ one and can be retired.
 | measurement | Dedicated | pick two elements, read gaps, centers and size difference in dp |
 | color_palette | Dedicated | dominant colors from a pixel copy of the window; tap to copy a hex value |
 | animation_control | Dedicated | sets the three system scales when `WRITE_SECURE_SETTINGS` is granted by adb; otherwise slows View animations in the app and says what is missing |
-| compose_renders | Generic | needs the host to wrap content in `DebugSwiftComposeProbe` |
-| doc_recorder | Generic | interactive recording screen |
+| compose_renders | Dedicated | recompositions per second and totals for the whole app; a `DebugSwiftComposeProbe` still counts one screen |
+| doc_recorder | Dedicated | start recording, close the panel, use the app, capture a screenshot numbered with each tap and scroll |
 
 ### Resources
 
@@ -131,8 +135,8 @@ one and can be retired.
 
 ### Outside the feature IDs
 
-- **Floating debug button** (iOS): a draggable button that opens the debugger. Android opens from a
-  shake or from the host. Add an overlay button in Kotlin.
+- **Floating debug button** (iOS): done on Android as `DebugFloatingButton`. The host sets `onTap` to
+  open its panel; the person turns it on from the panel.
 - **View debugger** (iOS): see `view_hierarchy`.
 - **Custom controllers** (iOS `customControllers`): parity already exists in Fuse as `DebugTool`.
 
@@ -143,4 +147,4 @@ one and can be retired.
 3. App screens: crashes, Logcat, location, deep links.
 4. Performance charts.
 5. Interface: view hierarchy explorer, measurement, color palette, animation control.
-6. Floating button.
+6. Floating button (done).
