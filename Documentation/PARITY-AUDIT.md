@@ -21,11 +21,11 @@ it does not say each button does what the iOS one does.
 | --- | --- | --- | --- | --- | --- |
 | Network | 9 | 9 | 9 | 0 | none known |
 | Performance | 11 | 11 | 3 | 8 | frame drops, hangs, backtraces, leaks, thread checker, super calls, memory warning, widget settings |
-| Interface | 9 | 10 | 3 | 7 | view debugger (3D), slow animations toggle, colorize |
+| Interface | 9 | 10 | 8 | 2 | compose render tracking and the documentation recorder are still text screens; no 3D view debugger |
 | Resources | 9 | 10 | 6 | 4 | realm browser (needs host registry) |
 | App | 13 | 13 | 8 | 5 | push simulator, push token, installed libraries, agent debug log |
 
-Android has 53 entries, 29 of them dedicated and 24 generic. Almost all the gap is the generic
+Android has 53 entries, 34 of them dedicated and 19 generic. Almost all the gap is the generic
 screens, not missing features.
 
 ## Done so far (verified on an Android 17 emulator)
@@ -38,6 +38,9 @@ screens, not missing features.
   mock location (confirmed at the OS level on the GPS, network and fused providers), device info,
   custom info and actions, event timeline.
 - Performance: live CPU, memory and frame charts, battery, disk throughput.
+- Interface: a window tree with Android views and Compose semantics (text, description, test tag,
+  clicks), a highlight drawn in the app, a measurement tool that gives the gap between two
+  elements, a color palette sampled from the screen, and the system animation scales.
 
 ## Known defects found while testing
 
@@ -91,10 +94,12 @@ one and can be retired.
 | Feature | Rating | Notes |
 | --- | --- | --- |
 | touches, view_borders, dark_mode, grid | Dedicated | toggles and settings |
-| view_hierarchy | Generic | iOS has a 3D view debugger (3.4k lines). Needs an Android layer explorer; Compose or Android View hosted from Swift |
-| animation_control | Generic, Gap | iOS toggles slow animations for the app; Android can only open Developer options |
+| view_hierarchy | Dedicated | tree of views and Compose semantics with element detail and a highlight in the app. No 3D view, and Compose layout nodes without semantics are not listed |
+| measurement | Dedicated | pick two elements, read gaps, centers and size difference in dp |
+| color_palette | Dedicated | dominant colors from a pixel copy of the window; tap to copy a hex value |
+| animation_control | Dedicated | sets the three system scales when `WRITE_SECURE_SETTINGS` is granted by adb; otherwise slows View animations in the app and says what is missing |
 | compose_renders | Generic | needs the host to wrap content in `DebugSwiftComposeProbe` |
-| doc_recorder, measurement, color_palette | Generic | interactive overlay screens |
+| doc_recorder | Generic | interactive recording screen |
 
 ### Resources
 
