@@ -356,6 +356,9 @@ object AndroidDebugTools {
         log("DebugSwift Android runtime installed on ${Build.MANUFACTURER} ${Build.MODEL}")
     }
 
+    /** Saved uncaught-exception reports, newest first. */
+    fun crashReportsNewestFirst(): List<String> = crashRecords.toList().asReversed()
+
     /** The installed application context, for tools that live outside this object. */
     fun contextOrNull(): Context? = appContext
 

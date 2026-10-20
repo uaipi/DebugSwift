@@ -71,9 +71,11 @@ object DebugSwiftNativeBridge {
         return decision.toString()
     }
 
-    /** Structured Resources data; see [DebugSwiftResourceAPI]. */
+    /** Structured data for the Resources and App screens; see [DebugSwiftResourceAPI] and [DebugSwiftAppAPI]. */
     @JvmStatic
-    fun resource(operation: String, arguments: String): String = DebugSwiftResourceAPI.handle(operation, arguments)
+    fun resource(operation: String, arguments: String): String =
+        if (operation.startsWith("app.")) DebugSwiftAppAPI.handle(operation, arguments)
+        else DebugSwiftResourceAPI.handle(operation, arguments)
 
     @JvmStatic
     fun snapshot(featureID: String): String = AndroidDebugTools.snapshot(featureID)
