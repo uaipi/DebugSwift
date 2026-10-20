@@ -356,6 +356,26 @@ object AndroidDebugTools {
         log("DebugSwift Android runtime installed on ${Build.MANUFACTURER} ${Build.MODEL}")
     }
 
+    /** The installed application context, for tools that live outside this object. */
+    fun contextOrNull(): Context? = appContext
+
+    fun webViewHostNames(): List<String> = webViewHosts.toList()
+
+    /** Every preference file the app owns, minus DebugSwift's own state. */
+    fun preferenceStoreNames(context: Context): List<String> {
+        val onDisk = File(context.applicationInfo.dataDir, "shared_prefs").listFiles().orEmpty()
+            .filter { it.isFile && it.extension.equals("xml", ignoreCase = true) }
+            .map { it.nameWithoutExtension }
+        return (registeredPreferences + onDisk).filterNot(::isDebugSwiftPreferenceStore).distinct().sorted()
+    }
+
+    private fun isDebugSwiftPreferenceStore(name: String): Boolean =
+        name == PREFS || name.startsWith("DebugSwift.") || name.startsWith("debugswift.")
+
+    /** Any app preference store can be edited; DebugSwift's own state cannot. */
+    private fun isEditablePreferenceStore(context: Context, name: String): Boolean =
+        name.isNotBlank() && !isDebugSwiftPreferenceStore(name) && name in preferenceStoreNames(context)
+
     fun registerPreferences(name: String) {
         if (name.isNotBlank() && name != PREFS && name !in registeredPreferences) {
             registeredPreferences.add(name)
@@ -4122,8 +4142,7 @@ object AndroidDebugTools {
         val assignment = parts[1].split("=", limit = 2)
         if (assignment.size != 2 || assignment[0].isBlank()) return "Enter preferenceStore|key=value."
         val storeName = parts[0].trim()
-        if (storeName.isBlank() || storeName == PREFS) return "Choose a registered host preference store."
-        if (storeName !in registeredPreferences) return "Register '$storeName' with AndroidDebugTools.registerPreferences(name) before editing it."
+        if (!isEditablePreferenceStore(context, storeName)) return "Choose one of the app's preference stores."
         val store = context.getSharedPreferences(storeName, Context.MODE_PRIVATE)
         val key = assignment[0].trim()
         val rawValue = assignment[1]
@@ -4153,8 +4172,8 @@ object AndroidDebugTools {
         if (parts.size != 2 || parts[0].isBlank() || parts[1].isBlank()) return "Enter preferenceStore|key."
         val storeName = parts[0].trim()
         val key = parts[1].trim()
-        if (storeName == PREFS || storeName !in registeredPreferences) {
-            return "Choose a registered host preference store."
+        if (!isEditablePreferenceStore(context, storeName)) {
+            return "Choose one of the app's preference stores."
         }
         val store = context.getSharedPreferences(storeName, Context.MODE_PRIVATE)
         if (key !in store.all) return "Preference '$key' was not found in '$storeName'."
@@ -4169,8 +4188,8 @@ object AndroidDebugTools {
             return "Enter preferenceStore|CLEAR to confirm removing all values from a store."
         }
         val storeName = parts[0].trim()
-        if (storeName.isBlank() || storeName == PREFS || storeName !in registeredPreferences) {
-            return "Choose a registered host preference store."
+        if (!isEditablePreferenceStore(context, storeName)) {
+            return "Choose one of the app's preference stores."
         }
         val store = context.getSharedPreferences(storeName, Context.MODE_PRIVATE)
         val removedCount = store.all.size
