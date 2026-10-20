@@ -113,29 +113,32 @@ one and can be retired.
 | compose_renders | Dedicated | recompositions per second and totals for the whole app; a `DebugSwiftComposeProbe` still counts one screen |
 | doc_recorder | Dedicated | start recording, close the panel, use the app, capture a screenshot numbered with each tap and scroll |
 
-### Resources
+### Resources (all dedicated)
 
-| Feature | Rating | Plan |
+| Feature | Rating | Notes |
 | --- | --- | --- |
 | security_audit | Dedicated | none |
-| files | Generic | browsable list, preview, share, delete |
-| preferences, persistent_data | Generic | key/value list with edit, replacing the `Store|key=value` text field |
-| keychain (Keystore) | Generic | alias list with detail |
-| sqlite, core_data (Room), swift_data (object store), realm | Generic | table and row browsers, SQL console |
-| cookies | Generic | list with detail and delete |
+| files | Dedicated | browse the app's files, cache and databases; preview text, share, delete |
+| preferences, persistent_data | Dedicated | every preference store, with edit, add and delete; the combined screen links to the Keystore |
+| keychain (Keystore) | Dedicated | aliases with algorithm, size and hardware backing; key material is never read |
+| sqlite, core_data (Room), swift_data (object store) | Dedicated | databases, tables, paged rows and a SQL console |
+| realm | Dedicated | shows what the host registers with `DebugSwiftRealmRegistry`; Realm lives on the JVM |
+| cookies | Dedicated | grouped by the domains the app's WebViews reported |
 
-### App
+### App (all dedicated)
 
-| Feature | Rating | Plan |
+| Feature | Rating | Notes |
 | --- | --- | --- |
-| console | Dedicated | none |
-| crashes | Generic | list and detail, fix defect 1 |
-| oslog_console (Logcat) | Generic | filterable list |
-| device_info, push_token, custom_info, custom_actions | Generic | simple lists. Host custom actions already have a native Swift route through `DebugTool` and `DebugActionGroup` in the panel |
-| push_simulator | Dedicated | permission, send, scenarios, templates, behavior options and history |
-| deep_links | Generic, Gap | add an opener: type a URI and fire the intent |
-| location | Generic, Gap | iOS can simulate locations; add mock location via the Android test provider |
-| loaded_libraries, event_bus, agent_debug_log | Dedicated | mapped files, packed native libraries, capture state and newest entries |
+| console, event_bus | Dedicated | filterable lists |
+| crashes | Dedicated | saved reports and process exits; binary tombstones are not printed |
+| oslog_console (Logcat) | Dedicated | level and text filters |
+| device_info, custom_info, custom_actions | Dedicated | key/value rows and run buttons. Host actions in Swift already have a route through `DebugTool` and `DebugActionGroup` |
+| push_simulator | Dedicated | permission, send, scenarios, templates, behavior options and history; posts real notifications |
+| push_token | Dedicated | shows the token the app reports with `DebugSwiftAndroidRuntime.reportPushToken` and copies it |
+| deep_links | Dedicated | opens any URI as a link intent |
+| location | Dedicated | mock position for the GPS, network and fused providers (the app must be the chosen mock location app) |
+| loaded_libraries | Dedicated | process maps plus the native libraries packed in the APK |
+| agent_debug_log | Dedicated | capture on and off, newest entries and sharing the NDJSON file |
 
 ### Outside the feature IDs
 
@@ -146,9 +149,6 @@ one and can be retired.
 
 ## Order of work
 
-1. Data plumbing for Swift network traffic.
-2. Resources screens (most used, simplest to make native lists).
-3. App screens: crashes, Logcat, location, deep links.
-4. Performance charts.
-5. Interface: view hierarchy explorer, measurement, color palette, animation control.
-6. Floating button (done).
+All of it is done: Swift network traffic, Resources, App, Performance, Interface and the floating
+button. What remains is what the table notes call out: no 3D view debugger, and the Realm browser
+depends on the host registering its databases.
