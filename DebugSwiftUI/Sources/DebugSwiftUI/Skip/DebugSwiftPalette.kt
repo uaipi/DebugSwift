@@ -40,6 +40,16 @@ object DebugSwiftPalette {
         return JSONObject().put("colors", dominantColors(pixels)).put("source", if (copied) "screen" else "view tree")
     }
 
+    /** The whole window as it is shown, at full size, or null when the system will not copy it. */
+    fun windowBitmap(activity: android.app.Activity): Bitmap? {
+        val decor = activity.window.decorView
+        if (decor.width <= 0 || decor.height <= 0 || Build.VERSION.SDK_INT < 26) return null
+        val bitmap = Bitmap.createBitmap(decor.width, decor.height, Bitmap.Config.ARGB_8888)
+        if (pixelCopy(activity.window, bitmap)) return bitmap
+        bitmap.recycle()
+        return null
+    }
+
     private fun pixelCopy(window: android.view.Window, bitmap: Bitmap): Boolean {
         // The callback must not run on the main thread: this call may be waiting on it.
         val thread = HandlerThread("DebugSwiftPixelCopy").apply { start() }

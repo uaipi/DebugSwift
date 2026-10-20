@@ -349,6 +349,7 @@ object AndroidDebugTools {
         loadCrashHistory(applicationContext)
         registerLifecycleCallbacks(applicationContext)
         seedForegroundActivity()
+        DebugSwiftRecomposition.start()
         installCrashHandler()
         startAnrWatchdog()
         startFrameMonitor()
@@ -357,8 +358,45 @@ object AndroidDebugTools {
         log("DebugSwift Android runtime installed on ${Build.MANUFACTURER} ${Build.MODEL}")
     }
 
+    /** What the tools attach to a window that has come to the front. */
+    private fun prepareWindow(activity: Activity) {
+        runCatching { DebugSwiftTouchCapture.install(activity) }
+        runCatching { DebugSwiftFloatingButton.attach(activity) }
+    }
+
     /** Saved uncaught-exception reports, newest first. */
     fun crashReportsNewestFirst(): List<String> = crashRecords.toList().asReversed()
+
+    fun composeProbeCount(): Long = composeRenderCount
+
+    fun frameTotal(): Long = frameCount
+
+    /** Starts or stops keeping tapped and scrolled gestures for the documentation recorder. */
+    fun setDocumentationRecording(value: Boolean) {
+        documentationRecording = value
+        publishEvent("interface", "Documentation recording ${if (value) "started" else "stopped"}")
+    }
+
+    fun documentationState(): String {
+        val density = appContext?.resources?.displayMetrics?.density ?: 1f
+        val gestures = org.json.JSONArray()
+        recordedInteractions.toList().forEach {
+            gestures.put(
+                JSONObject().put("kind", it.kind).put("startX", it.startX.toDouble()).put("startY", it.startY.toDouble())
+                    .put("endX", it.endX.toDouble()).put("endY", it.endY.toDouble())
+            )
+        }
+        return JSONObject().put("recording", documentationRecording).put("density", density.toDouble())
+            .put("gestures", gestures).put("screenshot", lastRecordingPath).put("message", lastCaptureMessage).toString()
+    }
+
+    fun captureDocumentationScreenshot(): String = captureScreenshot(annotateTouches = true)
+
+    fun clearDocumentation() {
+        recordedInteractions.clear()
+        recentTouches.clear()
+        lastRecordingPath = ""
+    }
 
     /** The Activity in front, for tools that inspect or draw over the window. */
     fun foregroundActivityOrNull(): Activity? = foregroundActivity.get()
@@ -400,6 +438,7 @@ object AndroidDebugTools {
                 val activity = recordClass.getDeclaredField("activity").apply { isAccessible = true }.get(record) as? Activity
                 if (!paused && activity != null) {
                     foregroundActivity = WeakReference(activity)
+                    mainHandler.post { prepareWindow(activity) }
                     return
                 }
             }
@@ -1713,8 +1752,10 @@ object AndroidDebugTools {
                 val density = appContext?.resources?.displayMetrics?.density ?: 1f
                 val threshold = 24f * density
                 val kind = if (dx * dx + dy * dy >= threshold * threshold) "scroll" else "tap"
-                recordedInteractions.add(RecordedInteraction(kind, start.first, start.second, point.first, point.second))
-                trim(recordedInteractions)
+                if (documentationRecording) {
+                    recordedInteractions.add(RecordedInteraction(kind, start.first, start.second, point.first, point.second))
+                    trim(recordedInteractions)
+                }
                 appendAgentEntry(
                     kind = "event",
                     location = "Interface/$kind",
@@ -3210,6 +3251,7 @@ object AndroidDebugTools {
                 appInForeground = true
                 appContext?.let(::refreshNotificationSettings)
                 if (previous !== activity) updateOverlay()
+                prepareWindow(activity)
                 publishEvent("app", "Activity resumed: ${activity.javaClass.simpleName}")
             }
 
@@ -3311,6 +3353,7 @@ object AndroidDebugTools {
     @Volatile private var slowestFrameMs = 0L
     @Volatile private var lastFrameNanos = 0L
     @Volatile private var lastRecordingPath = ""
+    @Volatile private var documentationRecording = false
     @Volatile private var lastPalette: List<String> = emptyList()
     @Volatile private var composeRenderCount = 0L
     @Volatile private var cpuUsagePercent = 0.0
@@ -3460,40 +3503,74 @@ object AndroidDebugTools {
         }
     }
 
+    @Volatile private var lastCaptureMessage = ""
+
+    /**
+     * Saves the window as a PNG with the recorded gestures drawn on it. The screen is read with a pixel
+     * copy, which sees what is really shown (software drawing fails on shaders), and the floating
+     * button is hidden for two frames first. It finishes a moment after this returns; the result shows
+     * up in [documentationState].
+     */
     private fun captureScreenshot(annotateTouches: Boolean = false): String {
         val activity = foregroundActivity.get() ?: return "No active window is available."
-        val view = activity.window.decorView
-        if (view.width <= 0 || view.height <= 0) return "The active window has no layout yet."
-        val bitmap = Bitmap.createBitmap(view.width, view.height, Bitmap.Config.ARGB_8888)
-        val canvas = Canvas(bitmap)
-        view.draw(canvas)
-        if (annotateTouches) {
-            val interactions = recordedInteractions.takeLast(24)
-            val markPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.RED; style = Paint.Style.FILL; strokeWidth = 4f }
-            val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.RED; style = Paint.Style.STROKE; strokeWidth = 5f }
-            val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.WHITE; textSize = 24f; textAlign = Paint.Align.CENTER; style = Paint.Style.FILL }
-            interactions.forEachIndexed { index, interaction ->
-                if (interaction.kind == "scroll") {
-                    canvas.drawLine(interaction.startX, interaction.startY, interaction.endX, interaction.endY, linePaint)
-                    val angle = atan2(interaction.endY - interaction.startY, interaction.endX - interaction.startX)
-                    val headLength = 22f
-                    val spread = (PI / 6).toFloat()
-                    canvas.drawLine(interaction.endX, interaction.endY, interaction.endX - headLength * cos(angle - spread), interaction.endY - headLength * sin(angle - spread), linePaint)
-                    canvas.drawLine(interaction.endX, interaction.endY, interaction.endX - headLength * cos(angle + spread), interaction.endY - headLength * sin(angle + spread), linePaint)
-                    canvas.drawCircle(interaction.startX, interaction.startY, 15f, markPaint)
-                    canvas.drawText((index + 1).toString(), interaction.startX, interaction.startY + 8f, labelPaint)
-                } else {
-                    canvas.drawCircle(interaction.endX, interaction.endY, 18f, markPaint)
-                    canvas.drawText((index + 1).toString(), interaction.endX, interaction.endY + 8f, labelPaint)
+        val decor = activity.window.decorView
+        if (decor.width <= 0 || decor.height <= 0) return "The active window has no layout yet."
+        lastCaptureMessage = ""
+        mainHandler.post {
+            DebugSwiftFloatingButton.setSuppressed(activity, true)
+            val choreographer = Choreographer.getInstance()
+            choreographer.postFrameCallback {
+                choreographer.postFrameCallback {
+                    Thread {
+                        val bitmap = DebugSwiftPalette.windowBitmap(activity)
+                        mainHandler.post { DebugSwiftFloatingButton.setSuppressed(activity, false) }
+                        if (bitmap == null) {
+                            lastCaptureMessage = "The screen could not be read."
+                            return@Thread
+                        }
+                        if (annotateTouches) annotate(bitmap, recordedInteractions.takeLast(24), activity.resources.displayMetrics.density)
+                        val file = File(appContext!!.cacheDir, "debugswift-screen-${System.currentTimeMillis()}.png")
+                        file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
+                        bitmap.recycle()
+                        lastRecordingPath = file.absolutePath
+                        lastCaptureMessage = "Screenshot saved to ${file.absolutePath}"
+                        publishEvent("interface", "Screenshot saved: ${file.name}")
+                    }.start()
                 }
             }
         }
-        val file = File(appContext!!.cacheDir, "debugswift-screen-${System.currentTimeMillis()}.png")
-        file.outputStream().use { bitmap.compress(Bitmap.CompressFormat.PNG, 100, it) }
-        lastRecordingPath = file.absolutePath
-        publishEvent("interface", "Screenshot saved: ${file.name}")
-        bitmap.recycle()
-        return "Screenshot saved to ${file.absolutePath}"
+        return "Capturing the screen..."
+    }
+
+    /** Numbered dots for taps; a numbered dot and an arrow for scrolls. */
+    private fun annotate(bitmap: Bitmap, interactions: List<RecordedInteraction>, density: Float) {
+        val canvas = Canvas(bitmap)
+        val markPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.RED; style = Paint.Style.FILL }
+        val linePaint = Paint(Paint.ANTI_ALIAS_FLAG).apply { color = Color.RED; style = Paint.Style.STROKE; strokeWidth = 2.5f * density }
+        val labelPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            color = Color.WHITE
+            textSize = 11f * density
+            textAlign = Paint.Align.CENTER
+            style = Paint.Style.FILL
+            isFakeBoldText = true
+        }
+        val radius = 11f * density
+        interactions.forEachIndexed { index, interaction ->
+            val label = (index + 1).toString()
+            if (interaction.kind == "scroll") {
+                canvas.drawLine(interaction.startX, interaction.startY, interaction.endX, interaction.endY, linePaint)
+                val angle = atan2(interaction.endY - interaction.startY, interaction.endX - interaction.startX)
+                val headLength = 12f * density
+                val spread = (PI / 6).toFloat()
+                canvas.drawLine(interaction.endX, interaction.endY, interaction.endX - headLength * cos(angle - spread), interaction.endY - headLength * sin(angle - spread), linePaint)
+                canvas.drawLine(interaction.endX, interaction.endY, interaction.endX - headLength * cos(angle + spread), interaction.endY - headLength * sin(angle + spread), linePaint)
+                canvas.drawCircle(interaction.startX, interaction.startY, radius, markPaint)
+                canvas.drawText(label, interaction.startX, interaction.startY + labelPaint.textSize / 3f, labelPaint)
+            } else {
+                canvas.drawCircle(interaction.endX, interaction.endY, radius, markPaint)
+                canvas.drawText(label, interaction.endX, interaction.endY + labelPaint.textSize / 3f, labelPaint)
+            }
+        }
     }
 
     private fun capturePalette(): String {

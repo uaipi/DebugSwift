@@ -78,6 +78,18 @@ object DebugSwiftNativeBridge {
         else DebugSwiftResourceAPI.handle(operation, arguments)
 
     @JvmStatic
+    fun floatingButtonEnabled(): Boolean =
+        AndroidDebugTools.contextOrNull()?.let(DebugSwiftFloatingButton::isEnabled) ?: false
+
+    @JvmStatic
+    fun setFloatingButtonEnabled(enabled: Boolean) {
+        AndroidDebugTools.contextOrNull()?.let { DebugSwiftFloatingButton.setEnabled(it, enabled) }
+    }
+
+    @JvmStatic
+    fun consumeFloatingButtonTap(): Boolean = DebugSwiftFloatingButton.consumeTap()
+
+    @JvmStatic
     fun snapshot(featureID: String): String = AndroidDebugTools.snapshot(featureID)
 
     @JvmStatic

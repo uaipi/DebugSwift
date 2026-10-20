@@ -41,6 +41,11 @@ object DebugSwiftAppAPI {
                 "app.perf.gc" -> JSONObject().put("message", AndroidDebugTools.collectGarbageAndRecheck())
                 "app.perf.stall" -> JSONObject().put("message", AndroidDebugTools.simulateMainThreadStall(args.optLong("ms", 1000)))
                 "app.perf.violation" -> JSONObject().put("message", AndroidDebugTools.triggerThreadViolation())
+                "app.compose.state" -> DebugSwiftRecomposition.state()
+                "app.doc.state" -> JSONObject(AndroidDebugTools.documentationState())
+                "app.doc.record" -> JSONObject().also { AndroidDebugTools.setDocumentationRecording(args.optString("on") == "true") }
+                "app.doc.capture" -> JSONObject().put("message", AndroidDebugTools.captureDocumentationScreenshot())
+                "app.doc.clear" -> JSONObject().also { AndroidDebugTools.clearDocumentation() }
                 "app.crashes" -> crashes(context)
                 "app.logcat" -> logcat(args.optString("filter"), args.optString("level"))
                 "app.deeplink.open" -> openDeepLink(context, args.optString("uri"))
