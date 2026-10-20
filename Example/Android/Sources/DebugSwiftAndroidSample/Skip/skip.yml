@@ -7,6 +7,7 @@
 #      contents:
 #        - 'implementation("androidx.compose.runtime:runtime")'
 
-# shared SwiftUI app module, transpiled to Compose for Android
+# Skip Fuse app module: native Swift on Android, bridged to the Compose host
 skip:
-  mode: 'transpiled'
+  mode: 'native'
+  bridging: true

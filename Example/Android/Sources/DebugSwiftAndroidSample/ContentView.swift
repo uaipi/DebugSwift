@@ -1,4 +1,4 @@
-import DebugSwiftAndroid
+import DebugSwiftUI
 import SwiftUI
 
 struct ContentView: View {
