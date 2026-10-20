@@ -302,7 +302,21 @@ struct DebugSwiftFeatureDestination: View {
             DebugSwiftFeatureDetail(feature: feature)
         }
         #else
-        if feature.id == "files" {
+        if feature.id == "crashes" {
+            DebugCrashesView()
+        } else if feature.id == "oslog_console" {
+            DebugLogcatView()
+        } else if feature.id == "deep_links" {
+            DebugDeepLinksView()
+        } else if feature.id == "location" {
+            DebugLocationView()
+        } else if feature.id == "device_info" || feature.id == "custom_info" {
+            DebugKeyValueView(featureID: feature.id, title: feature.title)
+        } else if feature.id == "custom_actions" {
+            DebugCustomActionsView()
+        } else if feature.id == "event_bus" {
+            DebugLinesView(featureID: feature.id, title: feature.title)
+        } else if feature.id == "files" {
             DebugFilesView(path: "")
         } else if feature.id == "preferences" || feature.id == "persistent_data" {
             DebugPreferencesView(includesKeystore: feature.id == "persistent_data")
