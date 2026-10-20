@@ -19,25 +19,39 @@ it does not say each button does what the iOS one does.
 
 | Area | iOS entries | Android entries | Dedicated | Generic | Capability gaps |
 | --- | --- | --- | --- | --- | --- |
-| Network | 9 | 9 | 9 | 0 | request injection and capture cover OkHttp and WebView, not Swift networking (see Data plumbing) |
-| Performance | 11 | 11 | 0 | 11 | live charts, disk rates and descriptors, battery history |
+| Network | 9 | 9 | 9 | 0 | none known |
+| Performance | 11 | 11 | 3 | 8 | frame drops, hangs, backtraces, leaks, thread checker, super calls, memory warning, widget settings |
 | Interface | 9 | 10 | 3 | 7 | view debugger (3D), slow animations toggle, colorize |
-| Resources | 9 | 10 | 1 | 9 | editable lists, file preview and sharing, table browsing UI |
-| App | 13 | 13 | 1 | 12 | location simulation, deep link opener, crash detail screens |
+| Resources | 9 | 10 | 6 | 4 | realm browser (needs host registry) |
+| App | 13 | 13 | 8 | 5 | push simulator, push token, installed libraries, agent debug log |
 
-Android has 53 entries, 15 of them dedicated and 38 generic. Almost all the gap is the 38 generic
+Android has 53 entries, 29 of them dedicated and 24 generic. Almost all the gap is the generic
 screens, not missing features.
+
+## Done so far (verified on an Android 17 emulator)
+
+- Swift network traffic reaches the Kotlin network tools, and the injection rules (delay, HTTP error,
+  network error, rewrite) act on Swift requests.
+- Resources: files with preview, share and delete; preferences with edit and add; databases with
+  tables, paged rows and a SQL console; Keystore aliases; cookies.
+- App: crash reports and process exits (no more binary dump), filterable Logcat, deep link opener,
+  mock location (confirmed at the OS level on the GPS, network and fused providers), device info,
+  custom info and actions, event timeline.
+- Performance: live CPU, memory and frame charts, battery, disk throughput.
 
 ## Known defects found while testing
 
-1. **Crash Reports shows raw binary.** Recent Android process exits include the tombstone protobuf
+1. **Crash Reports shows raw binary.** Fixed. Recent Android process exits include the tombstone protobuf
    verbatim, so the screen prints control characters (and crashes `uiautomator` when it reads them).
    The exit record should show reason, description, time and a decoded abort message only.
-2. **Swift traffic is invisible to the Kotlin network tools.** Capture on Android hooks OkHttp and
+2. **Swift traffic is invisible to the Kotlin network tools.** Fixed. Capture on Android hooks OkHttp and
    WebView. An app whose networking is Swift (Foundation on Android, like Voltrace) never reaches
    them, so HTTP, GraphQL, HAR, history and thresholds look empty even while requests happen. The
    Core-based inspector (`NetworkInspectorView`) does see that traffic.
-3. **Network injection cannot touch Swift networking.** On iOS a URLProtocol applies delay, failure and
+3. **Network injection cannot touch Swift networking.** Fixed; the host wraps its transport call in `NetworkInjection.apply`.
+4. **A saved rewrite rule with no method never matched after a restart** (org.json read a JSON null as the string "null"). Fixed.
+5. **Frames per second reads 0 on an idle screen**, because the Choreographer only counts frames that draw. Left as is.
+6. **The earlier notes below describe the state before these fixes.** On iOS a URLProtocol applies delay, failure and
    rewrite rules. On Android the rules are applied only by the OkHttp interceptor.
 
 ## Data plumbing (first, because every Network screen depends on it)
