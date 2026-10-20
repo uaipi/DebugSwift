@@ -312,6 +312,22 @@ struct DebugSwiftFeatureDestination: View {
             DebugAnimationControlView()
         } else if feature.id == "performance_overview" {
             DebugLiveMetricsView()
+        } else if feature.id == "performance_widget" {
+            DebugPerformanceWidgetView()
+        } else if feature.id == "frame_drops" {
+            DebugFrameDropsView()
+        } else if feature.id == "hangs" {
+            DebugHangsView()
+        } else if feature.id == "backtraces" {
+            DebugBacktracesView()
+        } else if feature.id == "leaks" {
+            DebugLeaksView()
+        } else if feature.id == "thread_checker" {
+            DebugThreadCheckerView()
+        } else if feature.id == "super_calls" {
+            DebugSuperCallsView()
+        } else if feature.id == "memory_warning" {
+            DebugMemoryWarningView()
         } else if feature.id == "battery" {
             DebugBatteryView()
         } else if feature.id == "disk" {
