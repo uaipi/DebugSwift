@@ -35,6 +35,12 @@ object DebugSwiftAppAPI {
                 "app.ui.palette" -> DebugSwiftPalette.capture()
                 "app.animation.get" -> DebugSwiftAnimations.state(context)
                 "app.animation.set" -> DebugSwiftAnimations.set(context, args.optDouble("scale", 1.0).toFloat())
+                "app.perf.detail" -> JSONObject(AndroidDebugTools.performanceDetailJSON(args.optString("kind")))
+                "app.perf.captureBacktrace" -> JSONObject().put("message", AndroidDebugTools.captureBacktrace(args.optString("all") == "true"))
+                "app.perf.clearBacktraces" -> JSONObject().also { AndroidDebugTools.clearBacktraces() }
+                "app.perf.gc" -> JSONObject().put("message", AndroidDebugTools.collectGarbageAndRecheck())
+                "app.perf.stall" -> JSONObject().put("message", AndroidDebugTools.simulateMainThreadStall(args.optLong("ms", 1000)))
+                "app.perf.violation" -> JSONObject().put("message", AndroidDebugTools.triggerThreadViolation())
                 "app.crashes" -> crashes(context)
                 "app.logcat" -> logcat(args.optString("filter"), args.optString("level"))
                 "app.deeplink.open" -> openDeepLink(context, args.optString("uri"))

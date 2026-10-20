@@ -2713,6 +2713,110 @@ object AndroidDebugTools {
             .toString()
     }
 
+    /** Structured data for one Performance screen: frames, hangs, backtraces, leaks, threads, supercalls, memory. */
+    fun performanceDetailJSON(kind: String): String {
+        val context = appContext ?: return JSONObject().put("error", "Android runtime has not been installed.").toString()
+        val result = JSONObject()
+        when (kind) {
+            "frames" -> {
+                val events = JSONArray()
+                slowFrameEvents.takeLast(200).asReversed().forEach { line ->
+                    val parts = line.split(" · ")
+                    events.put(JSONObject().put("time", parts.firstOrNull().orEmpty()).put("ms", parts.getOrNull(1)?.removeSuffix("ms")?.toLongOrNull() ?: 0L))
+                }
+                result.put("frames", frameCount).put("slow", slowFrameCount).put("slowest", slowestFrameMs).put("events", events)
+            }
+            "hangs" -> {
+                val stalls = JSONArray()
+                events.filter { it.contains("main thread stalled") }.takeLast(50).asReversed().forEach { event ->
+                    val first = event.substringBefore('\n')
+                    stalls.put(
+                        JSONObject().put("time", first.substringBefore(" main thread"))
+                            .put("ms", first.substringAfter("stalled for ").removeSuffix("ms").toLongOrNull() ?: 0L)
+                            .put("stack", event.substringAfter('\n', ""))
+                    )
+                }
+                result.put("thresholdMs", MAIN_THREAD_STALL_MS).put("stalls", stalls)
+            }
+            "backtraces" -> {
+                val captures = JSONArray()
+                backtraces.takeLast(30).asReversed().forEach { capture ->
+                    captures.put(JSONObject().put("title", capture.substringBefore('\n')).put("stack", capture.substringAfter('\n', "")))
+                }
+                result.put("captures", captures)
+            }
+            "leaks" -> {
+                val now = SystemClock.elapsedRealtime()
+                val candidates = JSONArray()
+                destroyedActivities.filter { now - it.destroyedAtMs >= 5_000L && it.reference.get() != null }.forEach {
+                    candidates.put(JSONObject().put("className", it.className).put("ageSeconds", (now - it.destroyedAtMs) / 1000))
+                }
+                result.put("destroyed", destroyedActivities.size).put("candidates", candidates)
+            }
+            "threads" -> {
+                val violations = JSONArray()
+                threadViolations.takeLast(50).asReversed().forEach { violation ->
+                    violations.put(JSONObject().put("title", violation.substringBefore('\n')).put("stack", violation.substringAfter('\n', "")))
+                }
+                result.put("enabled", synchronized(enabledTools) { "thread_checker" in enabledTools }).put("violations", violations)
+            }
+            "supercalls" -> {
+                val crashes = JSONArray()
+                crashRecords.filter { it.contains("SuperNotCalledException") }.takeLast(20).asReversed().forEach { crashes.put(it.take(4_000)) }
+                result.put("crashes", crashes)
+            }
+            "memory" -> {
+                val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+                val memory = ActivityManager.MemoryInfo().also(manager::getMemoryInfo)
+                result.put("simulated", simulatedMemoryWarningCount).put("systemAvailable", memory.availMem)
+                    .put("systemTotal", memory.totalMem).put("lowMemory", memory.lowMemory)
+            }
+            else -> result.put("error", "Unknown performance view: $kind")
+        }
+        return result.toString()
+    }
+
+    /** Saves the call stacks of the main thread, or of every thread, for the Backtraces screen. */
+    fun captureBacktrace(allThreads: Boolean): String {
+        val stacks = Thread.getAllStackTraces()
+        val selected = if (allThreads) stacks.entries.sortedBy { it.key.name } else stacks.entries.filter { it.key === Looper.getMainLooper().thread }
+        val body = selected.joinToString("\n\n") { (thread, frames) ->
+            "Thread ${thread.name} (${thread.state})\n" + frames.joinToString("\n") { "    at $it" }
+        }
+        backtraces.add("${timestamp()} · ${if (allThreads) "All ${selected.size} threads" else "Main thread"}\n$body")
+        trim(backtraces)
+        publishEvent("performance", "Backtrace captured")
+        return "Captured ${selected.size} thread${if (selected.size == 1) "" else "s"}."
+    }
+
+    fun clearBacktraces() {
+        backtraces.clear()
+    }
+
+    /** Collects garbage, then reports how many destroyed Activities a GC could not free. */
+    fun collectGarbageAndRecheck(): String {
+        System.gc()
+        Runtime.getRuntime().gc()
+        Thread.sleep(400)
+        val retained = destroyedActivities.count { it.reference.get() != null && SystemClock.elapsedRealtime() - it.destroyedAtMs >= 5_000L }
+        return if (retained == 0) "Garbage collected. No destroyed Activity is still held." else "Garbage collected. $retained destroyed Activit${if (retained == 1) "y is" else "ies are"} still held."
+    }
+
+    /** Blocks the main thread so the hang detector has something to report. */
+    fun simulateMainThreadStall(milliseconds: Long): String {
+        val duration = milliseconds.coerceIn(100, 5_000)
+        mainHandler.post { Thread.sleep(duration) }
+        return "Blocking the main thread for ${duration}ms."
+    }
+
+    /** Writes a file on the main thread, a StrictMode disk-write violation, to try the thread checker. */
+    fun triggerThreadViolation(): String {
+        mainHandler.post {
+            runCatching { File(appContext?.cacheDir, "debugswift-strictmode-probe.txt").writeText("probe ${System.currentTimeMillis()}") }
+        }
+        return if (synchronized(enabledTools) { "thread_checker" in enabledTools }) "Wrote a file on the main thread." else "Wrote a file on the main thread. Turn the checker on first to see it recorded."
+    }
+
     private fun simulateMemoryWarning(): String {
         val application = appContext?.applicationContext as? Application
         val activity = foregroundActivity.get()
@@ -3170,10 +3274,22 @@ object AndroidDebugTools {
     private fun startAnrWatchdog() {
         scheduler.scheduleAtFixedRate({
             val posted = SystemClock.uptimeMillis()
+            val handled = java.util.concurrent.atomic.AtomicBoolean(false)
+            // The stack that explains a stall is the one the main thread has while it is still stuck, so
+            // sample it from this thread once the threshold passes. Reading it after the main thread
+            // recovers would only show the watchdog itself.
+            val stuckStack = java.util.concurrent.atomic.AtomicReference<String?>(null)
+            scheduler.schedule({
+                if (!handled.get()) {
+                    stuckStack.set(Looper.getMainLooper().thread.stackTrace.take(25).joinToString("\n"))
+                }
+            }, MAIN_THREAD_STALL_MS, TimeUnit.MILLISECONDS)
             mainHandler.post {
+                handled.set(true)
                 val delay = SystemClock.uptimeMillis() - posted
                 if (delay > MAIN_THREAD_STALL_MS) {
-                    val event = "${timestamp()} main thread stalled for ${delay}ms\n${Thread.getAllStackTraces()[Looper.getMainLooper().thread]?.take(20)?.joinToString("\n") ?: "No stack available"}"
+                    val stack = stuckStack.get() ?: "The main thread recovered before a stack could be sampled."
+                    val event = "${timestamp()} main thread stalled for ${delay}ms\n$stack"
                     events.add(event)
                     trim(events)
                     Log.w(TAG, event)
