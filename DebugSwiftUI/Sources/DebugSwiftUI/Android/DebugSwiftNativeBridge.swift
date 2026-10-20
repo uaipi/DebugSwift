@@ -52,6 +52,13 @@ enum DebugSwiftNativeBridge {
         } ?? false
     }
 
+    static func reportPushToken(_ token: String) {
+        _ = withMethod("reportPushToken", signature: "(\(stringType))V") { javaClass, id in
+            try javaClass.callStatic(method: id, options: [], args: [token.toJavaParameter(options: [])])
+            return true
+        }
+    }
+
     static func snapshot(_ featureID: String) -> String { string("snapshot", featureID) }
     static func securityAuditSnapshot() -> String { string("securityAuditSnapshot") }
     static func networkInspectorSnapshot(_ featureID: String) -> String { string("networkInspectorSnapshot", featureID) }

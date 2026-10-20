@@ -1,6 +1,13 @@
 import SwiftUI
 
 /// Cookies the WebViews of the host app hold, grouped by domain.
+/// A cookie with its host, so the same cookie name on two domains stays distinct in the list.
+struct DebugCookieItem: Identifiable {
+    let host: String
+    let cookie: DebugCookie
+    var id: String { host + "|" + cookie.name }
+}
+
 struct DebugCookiesView: View {
     @State var hosts: [DebugCookieHost] = []
     @State var failure = ""
@@ -16,10 +23,10 @@ struct DebugCookiesView: View {
             }
             ForEach(hosts) { host in
                 Section {
-                    ForEach(host.cookies) { cookie in
+                    ForEach(host.cookies.map { DebugCookieItem(host: host.host, cookie: $0) }) { item in
                         VStack(alignment: .leading, spacing: 2) {
-                            Text(verbatim: cookie.name)
-                            Text(verbatim: cookie.value)
+                            Text(verbatim: item.cookie.name)
+                            Text(verbatim: item.cookie.value)
                                 .font(.system(.footnote, design: .monospaced))
                                 .foregroundColor(Color.secondary)
                                 .lineLimit(3)

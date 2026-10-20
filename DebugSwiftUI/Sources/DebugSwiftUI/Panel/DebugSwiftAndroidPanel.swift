@@ -346,6 +346,16 @@ struct DebugSwiftFeatureDestination: View {
             DebugCustomActionsView()
         } else if feature.id == "event_bus" {
             DebugLinesView(featureID: feature.id, title: feature.title)
+        } else if feature.id == "push_simulator" {
+            DebugPushNotificationsView()
+        } else if feature.id == "push_token" {
+            DebugPushTokenView()
+        } else if feature.id == "loaded_libraries" {
+            DebugLibrariesView()
+        } else if feature.id == "agent_debug_log" {
+            DebugAgentLogView()
+        } else if feature.id == "realm" {
+            DebugRealmView()
         } else if feature.id == "compose_renders" {
             DebugComposeRendersView()
         } else if feature.id == "doc_recorder" {
@@ -1192,6 +1202,13 @@ public enum DebugSwiftAndroidRuntime {
         return installed
         #else
         return false
+        #endif
+    }
+
+    /// Gives the Push Token screen the app's Firebase registration token. Call it where the app learns the token.
+    public static func reportPushToken(_ token: String) {
+        #if os(Android)
+        DebugSwiftNativeBridge.reportPushToken(token)
         #endif
     }
 

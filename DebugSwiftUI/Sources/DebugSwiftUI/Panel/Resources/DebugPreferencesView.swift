@@ -2,6 +2,13 @@ import SwiftUI
 
 /// Every preference store the app owns, with each value editable. `includesKeystore` adds the
 /// Keystore aliases below the stores, for the combined persistent data screen.
+/// A value with its store, so two stores that use the same key do not share a list identity.
+struct DebugPreferenceItem: Identifiable {
+    let store: String
+    let value: DebugPreferenceValue
+    var id: String { store + "|" + value.key }
+}
+
 struct DebugPreferencesView: View {
     let includesKeystore: Bool
     @State var stores: [DebugPreferenceStore] = []
@@ -18,11 +25,11 @@ struct DebugPreferencesView: View {
             }
             ForEach(stores) { store in
                 Section {
-                    ForEach(store.values) { value in
+                    ForEach(store.values.map { DebugPreferenceItem(store: store.name, value: $0) }) { item in
                         NavigationLink {
-                            DebugPreferenceEditView(store: store.name, key: value.key, type: value.type, value: value.value)
+                            DebugPreferenceEditView(store: item.store, key: item.value.key, type: item.value.type, value: item.value.value)
                         } label: {
-                            DebugPreferenceRow(value: value)
+                            DebugPreferenceRow(value: item.value)
                         }
                     }
                     NavigationLink {
