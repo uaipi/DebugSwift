@@ -28,6 +28,7 @@ object DebugSwiftAppAPI {
         val args = runCatching { JSONObject(arguments) }.getOrDefault(JSONObject())
         return try {
             when (operation) {
+                "app.perf.sample" -> JSONObject(AndroidDebugTools.performanceSampleJSON())
                 "app.crashes" -> crashes(context)
                 "app.logcat" -> logcat(args.optString("filter"), args.optString("level"))
                 "app.deeplink.open" -> openDeepLink(context, args.optString("uri"))

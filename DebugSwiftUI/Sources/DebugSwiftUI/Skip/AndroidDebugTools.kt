@@ -2647,6 +2647,45 @@ object AndroidDebugTools {
         }
     }
 
+    /** One reading of the live metrics, for the Performance screens. */
+    fun performanceSampleJSON(): String {
+        val context = appContext ?: return JSONObject().put("error", "Android runtime has not been installed.").toString()
+        val runtime = Runtime.getRuntime()
+        val manager = context.getSystemService(Context.ACTIVITY_SERVICE) as ActivityManager
+        val memory = ActivityManager.MemoryInfo().also(manager::getMemoryInfo)
+        val cpu = Process.getElapsedCpuTime()
+        cpuUsagePercent = cpuUsage(cpu)
+        val battery = context.registerReceiver(null, IntentFilter(Intent.ACTION_BATTERY_CHANGED))
+        val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
+        val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, 100) ?: 100
+        val status = battery?.getIntExtra(BatteryManager.EXTRA_STATUS, -1) ?: -1
+        val plugged = battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0
+        val io = runCatching {
+            File("/proc/self/io").readLines().associate { it.substringBefore(':') to it.substringAfter(':').trim().toLongOrNull() }
+        }.getOrDefault(emptyMap())
+        val appFiles = context.filesDir.walkTopDown().filter { it.isFile }.toList()
+        return JSONObject()
+            .put("cpuPercent", cpuUsagePercent)
+            .put("usedMemory", runtime.totalMemory() - runtime.freeMemory())
+            .put("maxMemory", runtime.maxMemory())
+            .put("nativeHeap", Debug.getNativeHeapAllocatedSize())
+            .put("systemAvailable", memory.availMem)
+            .put("systemTotal", memory.totalMem)
+            .put("lowMemory", memory.lowMemory)
+            .put("fps", framesPerSecond)
+            .put("frames", frameCount)
+            .put("slowFrames", slowFrameCount)
+            .put("slowestFrameMs", slowestFrameMs)
+            .put("batteryPercent", if (level >= 0 && scale > 0) level * 100 / scale else -1)
+            .put("charging", status == BatteryManager.BATTERY_STATUS_CHARGING || status == BatteryManager.BATTERY_STATUS_FULL)
+            .put("plugged", when (plugged) { BatteryManager.BATTERY_PLUGGED_AC -> "AC"; BatteryManager.BATTERY_PLUGGED_USB -> "USB"; BatteryManager.BATTERY_PLUGGED_WIRELESS -> "Wireless"; else -> "Battery" })
+            .put("readBytes", io["read_bytes"] ?: 0L)
+            .put("writeBytes", io["write_bytes"] ?: 0L)
+            .put("appFileCount", appFiles.size)
+            .put("appFileBytes", appFiles.sumOf { it.length() })
+            .toString()
+    }
+
     private fun simulateMemoryWarning(): String {
         val application = appContext?.applicationContext as? Application
         val activity = foregroundActivity.get()
