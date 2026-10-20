@@ -998,7 +998,9 @@ object AndroidDebugTools {
             val pattern = ruleJSON.optString("urlPattern", "").trim()
             if (pattern.isEmpty()) return@mapNotNull null
             val status = if (ruleJSON.isNull("responseStatusCode")) null else ruleJSON.optInt("responseStatusCode").takeIf { it in 100..599 }
-            val method = ruleJSON.optString("httpMethod", "").uppercase(Locale.ROOT).takeIf { it.isNotEmpty() }
+            // org.json turns a JSON null into the string "null", which would never match a method.
+            val method = if (ruleJSON.isNull("httpMethod")) null
+                else ruleJSON.optString("httpMethod", "").uppercase(Locale.ROOT).takeIf { it.isNotEmpty() }
             NetworkRewriteRule(
                 id = ruleJSON.optString("id", UUID.randomUUID().toString()),
                 urlPattern = pattern,
