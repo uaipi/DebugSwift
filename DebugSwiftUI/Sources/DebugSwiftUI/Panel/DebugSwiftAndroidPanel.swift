@@ -302,7 +302,15 @@ struct DebugSwiftFeatureDestination: View {
             DebugSwiftFeatureDetail(feature: feature)
         }
         #else
-        if feature.id == "performance_overview" {
+        if feature.id == "view_hierarchy" {
+            DebugViewHierarchyView()
+        } else if feature.id == "measurement" {
+            DebugMeasurementView()
+        } else if feature.id == "color_palette" {
+            DebugColorPaletteView()
+        } else if feature.id == "animation_control" {
+            DebugAnimationControlView()
+        } else if feature.id == "performance_overview" {
             DebugLiveMetricsView()
         } else if feature.id == "battery" {
             DebugBatteryView()
