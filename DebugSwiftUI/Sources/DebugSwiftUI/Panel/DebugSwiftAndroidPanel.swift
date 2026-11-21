@@ -332,18 +332,13 @@ struct DebugSwiftFeatureDestination: View {
             DebugPreferencesView(includesKeystore: false)
         } else if feature.id == "http_cookies" {
             DebugCookiesView()
-        } else if ["keychain", "persistent_data", "core_data", "swift_data", "database", "security_audit"].contains(feature.id) {
-            if feature.id == "swift_data" {
-                if #available(iOS 17.0, *) {
-                    DebugSwiftIOSNativeResourceHost(featureID: feature.id)
-                        .ignoresSafeArea(edges: .bottom)
-                } else {
-                    Text("SwiftData Browser requires iOS 17 or newer.")
-                }
-            } else {
-                DebugSwiftIOSNativeResourceHost(featureID: feature.id)
-                    .ignoresSafeArea(edges: .bottom)
-            }
+        } else if feature.id == "keychain" {
+            DebugKeystoreView()
+        } else if feature.id == "persistent_data" {
+            DebugPreferencesView(includesKeystore: true)
+        } else if ["core_data", "swift_data", "database"].contains(feature.id) {
+            // Core Data and SwiftData stores are SQLite files: the database browser opens them.
+            DebugDatabasesView(title: feature.title)
         } else {
             DebugSwiftFeatureDetail(feature: feature)
         }
@@ -951,17 +946,6 @@ struct DebugSwiftIOSNativeInterfaceHost: UIViewControllerRepresentable {
     func makeUIViewController(context: Context) -> UIViewController {
         DebugSwiftRuntime.prepareIOSDebugger()
         return DebugSwift.debugInterfaceViewController(for: featureID) ?? UIViewController()
-    }
-
-    func updateUIViewController(_ viewController: UIViewController, context: Context) {}
-}
-
-struct DebugSwiftIOSNativeResourceHost: UIViewControllerRepresentable {
-    let featureID: String
-
-    func makeUIViewController(context: Context) -> UIViewController {
-        DebugSwiftRuntime.prepareIOSDebugger()
-        return DebugSwift.debugResourceViewController(for: featureID) ?? UIViewController()
     }
 
     func updateUIViewController(_ viewController: UIViewController, context: Context) {}

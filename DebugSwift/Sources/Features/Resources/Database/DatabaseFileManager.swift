@@ -1,59 +1,11 @@
 //
-//  DatabaseBrowserViewModel.swift
+//  DatabaseFileManager.swift
 //  DebugSwift
 //
-//  ViewModel for Database Browser
+//  Finds the app's SQLite and Realm files for the database browser.
 //
 
 import Foundation
-import UIKit
-
-@MainActor
-final class DatabaseBrowserViewModel {
-    
-    // MARK: - Properties
-    
-    private let allowedTypes: Set<DatabaseType>?
-    private(set) var databases: [DatabaseFile] = []
-    private(set) var filteredDatabases: [DatabaseFile] = []
-    private var searchText: String = ""
-
-    init(allowedTypes: Set<DatabaseType>? = nil) {
-        self.allowedTypes = allowedTypes
-    }
-    
-    // MARK: - Public Methods
-    
-    func loadDatabaseFiles() {
-        let discoveredDatabases = DatabaseFileManager.shared.discoverDatabaseFiles()
-        if let allowedTypes {
-            databases = discoveredDatabases.filter { allowedTypes.contains($0.type) }
-        } else {
-            databases = discoveredDatabases
-        }
-        applyFilter()
-    }
-    
-    func filterDatabases(with searchText: String?) {
-        self.searchText = searchText ?? ""
-        applyFilter()
-    }
-    
-    // MARK: - Private Methods
-    
-    private func applyFilter() {
-        if searchText.isEmpty {
-            filteredDatabases = databases
-        } else {
-            filteredDatabases = databases.filter { database in
-                database.name.localizedCaseInsensitiveContains(searchText) ||
-                database.path.localizedCaseInsensitiveContains(searchText)
-            }
-        }
-    }
-}
-
-// MARK: - Database File Manager
 
 final class DatabaseFileManager: @unchecked Sendable {
     static let shared = DatabaseFileManager()
@@ -84,7 +36,7 @@ final class DatabaseFileManager: @unchecked Sendable {
         }
         
         DebugSwift.Resources.shared.appGroupIdentifiers.forEach { identifier in
-            if let path = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: identifier)?.path {
+            if let path = DebugSwift.Resources.appGroupContainer(identifier)?.path {
                 databaseFiles.append(contentsOf: findDatabaseFiles(in: path))
             }
         }
@@ -164,17 +116,6 @@ enum DatabaseType: Hashable {
             return "Realm Database"
         case .coreData:
             return "Core Data Database"
-        }
-    }
-    
-    var icon: UIImage? {
-        switch self {
-        case .sqlite:
-            return UIImage(systemName: "cylinder")
-        case .realm:
-            return UIImage(systemName: "cylinder.split.1x2")
-        case .coreData:
-            return UIImage(systemName: "cylinder.fill")
         }
     }
     

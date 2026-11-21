@@ -113,8 +113,7 @@ public class DebugSwift {
     public static func debugViewController() -> UIViewController {
         var controllers: [UIViewController & MainFeatureType] = [
             NetworkViewController(),
-            InterfaceViewController(),
-            ResourcesViewController()
+            InterfaceViewController()
         ]
 
         let hidden = FeatureHandling.hiddenFeatures
@@ -158,7 +157,10 @@ public class DebugSwift {
         case .interface:
             rootController = InterfaceViewController()
         case .resources:
-            rootController = ResourcesViewController()
+            rootController = SharedPanelOnlyViewController(
+                title: "Resources",
+                message: "The Resources tools are in the shared SwiftUI panel. Add DebugSwiftUI and call DebugSwiftSharedPanel.useForFloatingBall()."
+            )
         case .app:
             rootController = SharedPanelOnlyViewController(
                 title: "App",
@@ -238,6 +240,15 @@ public extension DebugSwift {
         navigationController.view.backgroundColor = .black
         navigationController.overrideUserInterfaceStyle = .dark
         return navigationController
+    }
+
+    /// The resource tools exposed in the shared SwiftUI feature list.
+    @MainActor
+    static func availableResourceFeatureIDs() -> [String] {
+        [
+            "files", "user_defaults", "keychain", "persistent_data", "core_data", "swift_data",
+            "http_cookies", "database", "security_audit"
+        ]
     }
 
     /// The app tools exposed in the shared SwiftUI feature list, without those the host turned off.

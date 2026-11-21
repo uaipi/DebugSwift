@@ -23,14 +23,22 @@ enum FileSharingManager {
         }
     }
 
+    /// Presents the share sheet; `completion` runs when it closes, shared or cancelled, or at once
+    /// when there is nothing to present it from.
     @MainActor
-    static func share(_ tempURL: URL) {
+    static func share(_ tempURL: URL, completion: (@MainActor () -> Void)? = nil) {
         let activity = UIActivityViewController(
             activityItems: [tempURL],
             applicationActivities: nil
         )
+        activity.completionWithItemsHandler = { _, _, _, _ in
+            MainActor.assumeIsolated { completion?() }
+        }
 
-        guard let controller = UIApplication.topViewController() else { return }
+        guard let controller = UIApplication.topViewController() else {
+            completion?()
+            return
+        }
 
         if let popover = activity.popoverPresentationController {
             popover.sourceView = controller.view
