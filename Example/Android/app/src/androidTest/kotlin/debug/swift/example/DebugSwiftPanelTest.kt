@@ -188,6 +188,58 @@ class DebugSwiftPanelTest {
     }
 
     @Test
+    fun aPreferenceKeyWithEqualsAndBarSignsIsSavedAndDeletedWhole() {
+        val context = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
+        val storeName = "debugswift_test_prefs"
+        val store = context.getSharedPreferences(storeName, android.content.Context.MODE_PRIVATE)
+        val key = "feature=enabled|beta"
+        store.edit().putString(key, "on").putString("feature", "untouched").commit()
+        fun payload(value: String?) = org.json.JSONObject().put("store", storeName).put("key", key)
+            .apply { if (value != null) put("value", value) }.toString()
+        try {
+            val saved = AndroidDebugTools.perform("preferences", "set_preference", payload("off"))
+            assertTrue("Saving answered: $saved", saved == "Preference updated.")
+            assertTrue("The key was saved whole", store.getString(key, null) == "off")
+            assertTrue("A key named like its prefix is left alone", store.getString("feature", null) == "untouched")
+            AndroidDebugTools.perform("preferences", "delete_preference", payload(null))
+            assertTrue("The key was deleted", !store.contains(key))
+        } finally {
+            store.edit().clear().commit()
+        }
+    }
+
+    @Test
+    fun aCookieCanBeDeleted() {
+        val manager = android.webkit.CookieManager.getInstance()
+        val host = "debugswift-${System.nanoTime()}.test"
+        manager.setCookie("https://$host", "session=1")
+        manager.setCookie("https://$host", "theme=dark")
+        fun names() = manager.getCookie("https://$host").orEmpty().split(';').map { it.trim().substringBefore('=') }.filter { it.isNotEmpty() }
+        assertTrue("Both cookies are set: ${names()}", names().containsAll(listOf("session", "theme")))
+        val deleted = org.json.JSONObject(
+            debug.swift.android.DebugSwiftResourceAPI.handle("cookies.delete", org.json.JSONObject().put("host", host).put("name", "session").toString())
+        )
+        assertTrue("Deleting answered: $deleted", deleted.optString("message") == "Deleted session.")
+        assertTrue("Only session was deleted: ${names()}", names() == listOf("theme"))
+        manager.setCookie("https://$host", "theme=; Max-Age=0")
+    }
+
+    @Test
+    fun aFolderListsAllItsEntries() {
+        val context = androidx.test.platform.app.InstrumentationRegistry.getInstrumentation().targetContext
+        val folder = java.io.File(context.cacheDir, "debugswift-many-${System.nanoTime()}").apply { mkdirs() }
+        try {
+            repeat(520) { java.io.File(folder, "file-$it").createNewFile() }
+            val listing = org.json.JSONObject(
+                debug.swift.android.DebugSwiftResourceAPI.handle("files.list", org.json.JSONObject().put("path", "cache/${folder.name}").toString())
+            )
+            assertTrue("Listed ${listing.optJSONArray("entries")?.length()} entries", listing.getJSONArray("entries").length() == 520)
+        } finally {
+            folder.deleteRecursively()
+        }
+    }
+
+    @Test
     fun clearingTheLogHidesWhatWasLoggedBefore() {
         fun log() = debug.swift.android.DebugSwiftAppAPI.handle("app.logcat", org.json.JSONObject().put("filter", "logclear-").put("level", "V").toString())
         val marker = java.util.UUID.randomUUID().toString().take(8)

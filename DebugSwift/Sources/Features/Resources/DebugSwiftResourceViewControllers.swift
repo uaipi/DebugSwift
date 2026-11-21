@@ -22,12 +22,6 @@ public extension DebugSwift {
     static func debugResourceViewController(for featureID: String) -> UIViewController? {
         let rootController: UIViewController
         switch featureID {
-        case "files":
-            rootController = ResourcesFilesViewController()
-        case "user_defaults":
-            let controller = ResourcesGenericController(viewModel: ResourcesUserDefaultsViewModel())
-            controller.addDefaultsDiffButton()
-            rootController = controller
         case "keychain":
             rootController = ResourcesGenericController(viewModel: ResourcesKeychainViewModel())
         case "persistent_data":
@@ -37,8 +31,6 @@ public extension DebugSwift {
         case "swift_data":
             guard #available(iOS 17.0, *) else { return nil }
             rootController = SwiftDataBrowserViewController()
-        case "http_cookies":
-            rootController = ResourcesGenericController(viewModel: ResourcesHTTPCookiesViewModel())
         case "database":
             rootController = DatabaseBrowserViewController()
         case "security_audit":

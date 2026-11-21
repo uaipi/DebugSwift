@@ -72,8 +72,12 @@ struct SharedPerformanceScreensTests {
             try await Task.sleep(nanoseconds: 150_000_000)
             _ = DebugPerformanceDetail.act("app.perf.stall", ["ms": "80"])
         }
-        try await Task.sleep(nanoseconds: 300_000_000)
-        let events = try DebugPerformanceDetail.fetch("frames", as: DebugFrameDetail.self).get().events
+        // A stall is counted when the next frame is drawn, which takes longer on a busy machine.
+        var events = try DebugPerformanceDetail.fetch("frames", as: DebugFrameDetail.self).get().events
+        for _ in 0..<30 where events.count < 2 {
+            try await Task.sleep(nanoseconds: 100_000_000)
+            events = try DebugPerformanceDetail.fetch("frames", as: DebugFrameDetail.self).get().events
+        }
         #expect(events.count >= 2)
         if events.count >= 2 { #expect(events[0].time >= events[1].time) }
     }

@@ -33,7 +33,7 @@ struct SharedAppScreensTests {
         }
         var all: [String] = []
         // The first read covers the last five minutes of a busy test process, which takes a while.
-        for _ in 0..<300 where !(all.contains("level-notice-\(marker)") && all.contains("level-error-\(marker)")) {
+        for _ in 0..<600 where !(all.contains("level-notice-\(marker)") && all.contains("level-error-\(marker)")) {
             try await Task.sleep(nanoseconds: 200_000_000)
             all = try messages("V")
         }
@@ -52,8 +52,9 @@ struct SharedAppScreensTests {
             try DebugResourceClient.fetch("app.logcat", ["filter": "logclear-", "level": "V"], as: DebugLogListing.self).get().entries.map(\.message)
         }
         DebugSwiftLogProbe.logError(before)
+        // New entries reach the process's log store with a delay, longer while the machine is busy.
         var seen: [String] = []
-        for _ in 0..<300 where !seen.contains(before) {
+        for _ in 0..<600 where !seen.contains(before) {
             try await Task.sleep(nanoseconds: 200_000_000)
             seen = try messages()
         }
@@ -63,7 +64,7 @@ struct SharedAppScreensTests {
         try await Task.sleep(nanoseconds: 50_000_000)
         DebugSwiftLogProbe.logError(after)
         seen = []
-        for _ in 0..<300 where !seen.contains(after) {
+        for _ in 0..<600 where !seen.contains(after) {
             try await Task.sleep(nanoseconds: 200_000_000)
             seen = try messages()
         }

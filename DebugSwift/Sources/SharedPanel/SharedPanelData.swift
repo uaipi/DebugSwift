@@ -33,6 +33,8 @@ public enum SharedPanelData {
             reply = SharedPanelPerformance.shared.resource(operation, arguments)
         } else if let app = SharedPanelApp.shared.resource(operation, arguments) {
             reply = app
+        } else if let resources = SharedPanelResources.shared.resource(operation, arguments) {
+            reply = resources
         } else {
             reply = ["error": "This tool is not available on iOS."]
         }
@@ -44,6 +46,7 @@ public enum SharedPanelData {
     public static func perform(featureID: String, actionID: String, value: String) -> String? {
         SharedPanelPerformance.shared.perform(featureID: featureID, actionID: actionID, value: value)
             ?? SharedPanelApp.shared.perform(featureID: featureID, actionID: actionID, value: value)
+            ?? SharedPanelResources.shared.perform(featureID: featureID, actionID: actionID, value: value)
     }
 
     /// A feature's text snapshot, or nil when this feature is not handled here.

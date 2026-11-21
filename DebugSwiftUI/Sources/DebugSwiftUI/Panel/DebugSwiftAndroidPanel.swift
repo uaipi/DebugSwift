@@ -326,7 +326,13 @@ struct DebugSwiftFeatureDestination: View {
                 .ignoresSafeArea(edges: .bottom)
         } else if DebugAppDestination.featureIDs.contains(feature.id) {
             DebugAppDestination(feature: feature)
-        } else if ["files", "user_defaults", "keychain", "persistent_data", "core_data", "swift_data", "http_cookies", "database", "security_audit"].contains(feature.id) {
+        } else if feature.id == "files" {
+            DebugFilesView(path: "")
+        } else if feature.id == "user_defaults" {
+            DebugPreferencesView(includesKeystore: false)
+        } else if feature.id == "http_cookies" {
+            DebugCookiesView()
+        } else if ["keychain", "persistent_data", "core_data", "swift_data", "database", "security_audit"].contains(feature.id) {
             if feature.id == "swift_data" {
                 if #available(iOS 17.0, *) {
                     DebugSwiftIOSNativeResourceHost(featureID: feature.id)

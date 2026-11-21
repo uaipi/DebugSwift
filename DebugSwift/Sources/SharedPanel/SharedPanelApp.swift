@@ -266,9 +266,14 @@ final class SharedPanelApp {
     /// Only the newest `limit` are kept.
     nonisolated private static func readLog(since: Date?, includeApple: Bool, limit: Int) -> (items: [LogItem], error: String?) {
         let start = since ?? Date().addingTimeInterval(-300)
+        // The process store may ignore the position, so the store filters by date (and subsystem)
+        // too: without it each read walks the whole process log, which grows as the app runs.
+        var conditions = [NSPredicate(format: "date > %@", start as NSDate)]
+        if !includeApple { conditions.append(NSPredicate(format: "NOT (subsystem BEGINSWITH 'com.apple')")) }
+        let predicate = NSCompoundPredicate(andPredicateWithSubpredicates: conditions)
         let opened = Result {
             let store = try OSLogStore(scope: .currentProcessIdentifier)
-            return try store.getEntries(at: store.position(date: start))
+            return try store.getEntries(at: store.position(date: start), matching: predicate)
         }
         guard case let .success(entries) = opened else {
             if case let .failure(error) = opened { return ([], error.localizedDescription) }

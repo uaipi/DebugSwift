@@ -5,6 +5,11 @@ struct DebugFilesView: View {
     let path: String
     @State var listing: DebugFileListing? = nil
     @State var failure = ""
+    @State var confirmsDelete = false
+    @Environment(\.dismiss) var dismiss
+
+    /// A folder inside a storage root; the roots themselves can't be deleted.
+    var isDeletable: Bool { path.contains("/") }
 
     var body: some View {
         List {
@@ -21,9 +26,27 @@ struct DebugFilesView: View {
                     DebugFileRow(parent: path, entry: entry)
                 }
             }
+            if isDeletable {
+                Section {
+                    Button("Delete this folder", role: .destructive) { confirmsDelete = true }
+                }
+            }
         }
         .navigationTitle(Text(verbatim: title))
         .onAppear { load() }
+        .alert("Delete this folder and everything in it?", isPresented: $confirmsDelete) {
+            Button("Cancel", role: .cancel) {}
+            Button("Delete", role: .destructive) { delete() }
+        }
+    }
+
+    func delete() {
+        switch DebugResourceClient.fetch("files.delete", ["path": path], as: DebugFileDeletion.self) {
+        case let .success(result):
+            if result.ok { dismiss() } else { failure = result.message }
+        case let .failure(error):
+            failure = error.message
+        }
     }
 
     var title: String {

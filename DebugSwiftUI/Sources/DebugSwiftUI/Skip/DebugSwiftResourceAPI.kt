@@ -40,6 +40,8 @@ object DebugSwiftResourceAPI {
                 "db.rows" -> dbRows(context, args.optString("db"), args.optString("table"), args.optInt("offset"))
                 "db.query" -> dbQuery(context, args.optString("db"), args.optString("sql"))
                 "cookies.list" -> cookiesList()
+                "cookies.delete" -> cookiesDelete(args.optString("host"), args.optString("name"))
+                "cookies.clear" -> cookiesClear()
                 else -> failure("Unknown resource operation: $operation")
             }.toString()
         } catch (exception: Exception) {
@@ -78,7 +80,6 @@ object DebugSwiftResourceAPI {
         if (!directory.isDirectory) return failure("Not a directory: $path")
         directory.listFiles().orEmpty()
             .sortedWith(compareBy<File> { !it.isDirectory }.thenBy { it.name.lowercase() })
-            .take(500)
             .forEach { file ->
                 entries.put(
                     JSONObject().put("name", file.name).put("isDirectory", file.isDirectory)
@@ -233,6 +234,27 @@ object DebugSwiftResourceAPI {
     }
 
     // MARK: Cookies
+
+    /** Expires the cookie for the host and its paths the WebView cookie store reports. */
+    private fun cookiesDelete(host: String, name: String): JSONObject {
+        if (host.isBlank() || name.isBlank()) return failure("Choose a cookie.")
+        val manager = CookieManager.getInstance()
+        val url = "https://$host"
+        val present = manager.getCookie(url).orEmpty().split(';').any { it.trim().substringBefore('=') == name }
+        if (!present) return failure("No cookie $name for $host.")
+        manager.setCookie(url, "$name=; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT")
+        manager.setCookie(url, "$name=; Max-Age=0; Expires=Thu, 01 Jan 1970 00:00:00 GMT; Path=/")
+        manager.flush()
+        return JSONObject().put("message", "Deleted $name.")
+    }
+
+    private fun cookiesClear(): JSONObject {
+        val manager = CookieManager.getInstance()
+        // No callback: it would run on this thread's looper, which may be the one waiting here.
+        manager.removeAllCookies(null)
+        manager.flush()
+        return JSONObject().put("message", "Deleted all cookies.")
+    }
 
     private fun cookiesList(): JSONObject {
         val hosts = JSONArray()

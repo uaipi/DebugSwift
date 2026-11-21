@@ -9,23 +9,17 @@
 import UIKit
 
 final class ResourcesViewController: BaseController, MainFeatureType {
+    // Files, User Defaults and HTTP Cookies are in the shared SwiftUI panel (DebugSwiftUI).
     private enum Item: CaseIterable {
-        case fileManager
-        case userDefaults
         case keychain
         case persistentData
         case coreData
         case swiftData
-        case httpCookies
         case database
         case securityAudit
 
         var localized: String {
             switch self {
-            case .fileManager:
-                "Files"
-            case .userDefaults:
-                "User Defaults"
             case .keychain:
                 "Keychain"
             case .persistentData:
@@ -34,8 +28,6 @@ final class ResourcesViewController: BaseController, MainFeatureType {
                 "Core Data"
             case .swiftData:
                 "SwiftData Browser"
-            case .httpCookies:
-                "HTTP Cookies"
             case .database:
                 "Database Browser"
             case .securityAudit:
@@ -56,11 +48,8 @@ final class ResourcesViewController: BaseController, MainFeatureType {
     }()
 
     private let items: [Item] = [
-        .fileManager,
-        .userDefaults,
         .keychain,
         .persistentData,
-        .httpCookies,
         .coreData,
         .swiftData,
         .database,
@@ -128,14 +117,6 @@ extension ResourcesViewController: UITableViewDataSource, UITableViewDelegate {
     func tableView(_: UITableView, didSelectRowAt indexPath: IndexPath) {
         var controller: UIViewController?
         switch items[indexPath.row] {
-        case .fileManager:
-            // Handle "File" selection
-            controller = ResourcesFilesViewController()
-        case .userDefaults:
-            let viewModel = ResourcesUserDefaultsViewModel()
-            let genericController = ResourcesGenericController(viewModel: viewModel)
-            genericController.addDefaultsDiffButton()
-            controller = genericController
         case .keychain:
             let viewModel = ResourcesKeychainViewModel()
             controller = ResourcesGenericController(viewModel: viewModel)
@@ -156,9 +137,6 @@ extension ResourcesViewController: UITableViewDataSource, UITableViewDelegate {
                 present(alert, animated: true)
             }
 
-        case .httpCookies:
-            let viewModel = ResourcesHTTPCookiesViewModel()
-            controller = ResourcesGenericController(viewModel: viewModel)
         case .database:
             controller = DatabaseBrowserViewController()
         case .securityAudit:

@@ -623,11 +623,17 @@ extension DebugSwift {
             appGroupIdentifiers.removeAll { $0 == identifier }
         }
         
+        /// Finds an App Group's container. Tests replace it: the simulator has no container for a
+        /// group the test app isn't entitled to.
+        nonisolated(unsafe) static var appGroupContainer: (String) -> URL? = { identifier in
+            FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: identifier)
+        }
+
         /// Get accessible app group containers
         /// - Returns: Array of accessible app group identifiers with their URLs
         public func getAccessibleAppGroups() -> [(identifier: String, url: URL)] {
             return appGroupIdentifiers.compactMap { identifier in
-                guard let url = FileManager.default.containerURL(forSecurityApplicationGroupIdentifier: identifier) else {
+                guard let url = Self.appGroupContainer(identifier) else {
                     return nil
                 }
                 return (identifier, url)

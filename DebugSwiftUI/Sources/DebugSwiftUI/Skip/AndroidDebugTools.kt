@@ -4746,16 +4746,34 @@ object AndroidDebugTools {
             "The audit reports key names and file paths only; it never displays matched values."
     }
 
+    /** The shared editor's JSON, {"store", "key", "value"}, so a key may hold "=" or "|"; null for the text form. */
+    private fun preferencePayload(value: String): Triple<String, String, String?>? {
+        if (!value.startsWith("{")) return null
+        val json = runCatching { JSONObject(value) }.getOrNull() ?: return Triple("", "", null)
+        return Triple(json.optString("store"), json.optString("key"), if (json.has("value")) json.optString("value") else null)
+    }
+
     private fun writePreference(context: Context, value: String): String {
-        val parts = value.split("|", limit = 2)
-        if (parts.size != 2) return "Enter preferenceStore|key=value."
-        val assignment = parts[1].split("=", limit = 2)
-        if (assignment.size != 2 || assignment[0].isBlank()) return "Enter preferenceStore|key=value."
-        val storeName = parts[0].trim()
+        val payload = preferencePayload(value)
+        val storeName: String
+        val key: String
+        val rawValue: String
+        if (payload != null) {
+            if (payload.second.isEmpty() || payload.third == null) return "Enter a key and a value."
+            storeName = payload.first
+            key = payload.second
+            rawValue = payload.third!!
+        } else {
+            val parts = value.split("|", limit = 2)
+            if (parts.size != 2) return "Enter preferenceStore|key=value."
+            val assignment = parts[1].split("=", limit = 2)
+            if (assignment.size != 2 || assignment[0].isBlank()) return "Enter preferenceStore|key=value."
+            storeName = parts[0].trim()
+            key = assignment[0].trim()
+            rawValue = assignment[1]
+        }
         if (!isEditablePreferenceStore(context, storeName)) return "Choose one of the app's preference stores."
         val store = context.getSharedPreferences(storeName, Context.MODE_PRIVATE)
-        val key = assignment[0].trim()
-        val rawValue = assignment[1]
         val current = store.all[key]
         val editor = store.edit()
         when (current) {
@@ -4778,10 +4796,19 @@ object AndroidDebugTools {
     }
 
     private fun deletePreference(context: Context, value: String): String {
-        val parts = value.split("|", limit = 2)
-        if (parts.size != 2 || parts[0].isBlank() || parts[1].isBlank()) return "Enter preferenceStore|key."
-        val storeName = parts[0].trim()
-        val key = parts[1].trim()
+        val payload = preferencePayload(value)
+        val storeName: String
+        val key: String
+        if (payload != null) {
+            if (payload.first.isBlank() || payload.second.isEmpty()) return "Enter preferenceStore|key."
+            storeName = payload.first
+            key = payload.second
+        } else {
+            val parts = value.split("|", limit = 2)
+            if (parts.size != 2 || parts[0].isBlank() || parts[1].isBlank()) return "Enter preferenceStore|key."
+            storeName = parts[0].trim()
+            key = parts[1].trim()
+        }
         if (!isEditablePreferenceStore(context, storeName)) {
             return "Choose one of the app's preference stores."
         }
