@@ -112,7 +112,6 @@ public class DebugSwift {
     @MainActor
     public static func debugViewController() -> UIViewController {
         var controllers: [UIViewController & MainFeatureType] = [
-            NetworkViewController(),
             InterfaceViewController()
         ]
 
@@ -148,7 +147,10 @@ public class DebugSwift {
 
         switch feature {
         case .network:
-            rootController = NetworkViewController()
+            rootController = SharedPanelOnlyViewController(
+                title: "Network",
+                message: "The Network tools are in the shared SwiftUI panel. Add DebugSwiftUI and call DebugSwiftSharedPanel.useForFloatingBall()."
+            )
         case .performance:
             rootController = SharedPanelOnlyViewController(
                 title: "Performance",
@@ -207,33 +209,17 @@ public extension DebugSwift {
         return featureIDs
     }
 
-    /// Builds an existing UIKit network inspector for a single shared feature row.
+    /// The network tools are in the shared SwiftUI panel; this returns a screen that says so, or
+    /// nil for an ID that isn't a network tool.
     @MainActor
     static func debugNetworkViewController(for featureID: String) -> UIViewController? {
-        let rootController: UIViewController
-        switch featureID {
-        case "http", "graphql", "network_encryption", "har_export":
-            rootController = NetworkViewController(mode: .http)
-        case "websocket":
-            rootController = NetworkViewController(mode: .websocket)
-        case "webview_network":
-            rootController = NetworkViewController(mode: .webview)
-        case "network_injection":
-            rootController = NetworkInjectionSettingsController()
-        case "network_thresholds":
-            rootController = NetworkThresholdController()
-        case "network_history":
-            #if canImport(SwiftData)
-            guard #available(iOS 17.0, *) else { return nil }
-            rootController = NetworkSessionHistoryViewController()
-            #else
-            return nil
-            #endif
-        default:
-            return nil
-        }
-
-        rootController.navigationItem.largeTitleDisplayMode = .never
+        let known = ["http", "graphql", "network_encryption", "har_export", "websocket", "webview_network",
+                     "network_injection", "network_thresholds", "network_history"]
+        guard known.contains(featureID) else { return nil }
+        let rootController = SharedPanelOnlyViewController(
+            title: "Network",
+            message: "This tool is in the shared SwiftUI panel. Add DebugSwiftUI and call DebugSwiftSharedPanel.useForFloatingBall()."
+        )
         let navigationController = UINavigationController(rootViewController: rootController)
         navigationController.navigationBar.prefersLargeTitles = false
         navigationController.navigationBar.tintColor = .white

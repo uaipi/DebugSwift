@@ -29,7 +29,6 @@ extension DebugSwift {
             get {
                 if _defaultControllers == nil {
                     _defaultControllers = [
-                        NetworkViewController(),
                         InterfaceViewController()
                     ]
                 }

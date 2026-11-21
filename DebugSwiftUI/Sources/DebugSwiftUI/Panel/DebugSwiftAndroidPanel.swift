@@ -942,19 +942,6 @@ struct DebugSwiftConsoleView: View {
     }
 }
 
-#if os(iOS)
-struct DebugSwiftIOSNativeNetworkHost: UIViewControllerRepresentable {
-    let featureID: String
-
-    func makeUIViewController(context: Context) -> UIViewController {
-        DebugSwiftRuntime.prepareIOSDebugger()
-        return DebugSwift.debugNetworkViewController(for: featureID) ?? UIViewController()
-    }
-
-    func updateUIViewController(_ viewController: UIViewController, context: Context) {}
-}
-#endif
-
 /// The Performance tools: the same screens on iOS and Android, each reading its platform's data.
 struct DebugPerformanceDestination: View {
     static let featureIDs: Set<String> = [
