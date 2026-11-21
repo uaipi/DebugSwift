@@ -98,7 +98,7 @@ extension InterfaceViewController: UITableViewDataSource, UITableViewDelegate {
         let title = feature.title ?? ""
 
         switch Features.allCasesWithPermissions[indexPath.row] {
-        case .grid, .swiftUIRenderSettings, .docRecorder, .colorPalette:
+        case .grid:
             let cell = tableView.dequeueReusableCell(withIdentifier: "cell", for: indexPath)
             cell.setup(title: title)
             return cell
@@ -120,12 +120,6 @@ extension InterfaceViewController: UITableViewDataSource, UITableViewDelegate {
         switch Features.allCasesWithPermissions[indexPath.row] {
         case .grid:
             controller = InterfaceGridController()
-        case .swiftUIRenderSettings:
-            controller = InterfaceSwiftUIRenderController()
-        case .docRecorder:
-            controller = DocRecorderPanelController()
-        case .colorPalette:
-            controller = ColorPaletteController()
         default:
             break
         }
@@ -186,9 +180,6 @@ extension InterfaceViewController {
         case grid
         case darkMode
         case measurement
-        case swiftUIRenderSettings
-        case docRecorder
-        case colorPalette
 
         var title: String? {
             switch self {
@@ -204,12 +195,6 @@ extension InterfaceViewController {
                 return "Dark Mode"
             case .measurement:
                 return "UI measurements"
-            case .swiftUIRenderSettings:
-                return "SwiftUI render tracking"
-            case .docRecorder:
-                return "Documentation Recorder"
-            case .colorPalette:
-                return "Color palette extractor"
             }
         }
 
@@ -237,15 +222,7 @@ extension InterfaceViewController {
             if DebugSwift.App.shared.disableMethods.contains(.views) {
                 cases.removeAll(where: { $0 == .colorize || $0 == .touches })
             }
-            
-            if DebugSwift.App.shared.disableMethods.contains(.swiftUIRender) {
-                cases.removeAll(where: { $0 == .swiftUIRenderSettings })
-            }
-            
-            // Hide SwiftUI render tracking if beta features are not enabled
-            if !FeatureHandling.enabledBetaFeatures.contains(.swiftUIRenderTracking) {
-                cases.removeAll(where: { $0 == .swiftUIRenderSettings })
-            }
+
 
             return cases
         }

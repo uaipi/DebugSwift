@@ -89,6 +89,9 @@ public struct DebugPanel: View {
                 }
             }
         }
+        #if os(iOS)
+        .background(DebugPanelMarker().frame(width: 0, height: 0))
+        #endif
     }
 }
 

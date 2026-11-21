@@ -161,9 +161,9 @@ enum DebugSwiftArea: String, CaseIterable, Identifiable, Hashable {
                 .init("animations", "Slow animations", "Slow app animations to inspect transitions and motion."),
                 .init("dark_mode", "Dark Mode", "Override the active app window appearance."),
                 .init("measurement", "UI measurements", "Show element positions, sizes, and spacing."),
-                .init("swiftui_render", "SwiftUI render tracking", "Track SwiftUI rendering activity."),
-                .init("doc_recorder", "Documentation Recorder", "Capture and annotate interactions for documentation."),
-                .init("color_palette", "Color palette extractor", "Sample and export colors from the active screen.")
+                .init("swiftui_render", "SwiftUI render tracking", "Count SwiftUI renders and outline each view as it renders."),
+                .init("doc_recorder", "Documentation Recorder", "Capture taps and scrolls, then save a screenshot annotated with numbered markers and arrows."),
+                .init("color_palette", "Color Palette", "Sample the colors of the app's screen, ranked by how much of it they cover.")
             ].filter { availableIDs.contains($0.id) }
             #else
             return [
@@ -321,9 +321,12 @@ struct DebugSwiftFeatureDestination: View {
             DebugPerformanceDestination(featureID: feature.id)
         } else if ["touches", "colorize", "animations", "dark_mode", "measurement"].contains(feature.id) {
             DebugSwiftInterfaceSettingView(featureID: feature.id)
-        } else if ["swiftui_render", "doc_recorder", "color_palette"].contains(feature.id) {
-            DebugSwiftIOSNativeInterfaceHost(featureID: feature.id)
-                .ignoresSafeArea(edges: .bottom)
+        } else if feature.id == "swiftui_render" {
+            DebugComposeRendersView()
+        } else if feature.id == "doc_recorder" {
+            DebugDocRecorderView()
+        } else if feature.id == "color_palette" {
+            DebugColorPaletteView()
         } else if DebugAppDestination.featureIDs.contains(feature.id) {
             DebugAppDestination(feature: feature)
         } else if feature.id == "files" {
@@ -940,17 +943,6 @@ struct DebugSwiftConsoleView: View {
 }
 
 #if os(iOS)
-struct DebugSwiftIOSNativeInterfaceHost: UIViewControllerRepresentable {
-    let featureID: String
-
-    func makeUIViewController(context: Context) -> UIViewController {
-        DebugSwiftRuntime.prepareIOSDebugger()
-        return DebugSwift.debugInterfaceViewController(for: featureID) ?? UIViewController()
-    }
-
-    func updateUIViewController(_ viewController: UIViewController, context: Context) {}
-}
-
 struct DebugSwiftIOSNativeNetworkHost: UIViewControllerRepresentable {
     let featureID: String
 

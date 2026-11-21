@@ -24,6 +24,8 @@ final class SharedPanelPerformance: NSObject {
     private var framesThisSecond = 0
     private var framesPerSecond = 0
     private var frameCount = 0
+    /// Frames drawn since the sampler started (or frame timing was last cleared).
+    var framesDrawn: Int { frameCount }
     private var slowFrameCount = 0
     private var slowestFrameMs = 0
     private var slowFrames: [(date: Date, ms: Int)] = []

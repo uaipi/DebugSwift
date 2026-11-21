@@ -90,21 +90,16 @@ public extension DebugSwift {
         )
     }
 
-    /// Interface pages that can continue using their native UIKit implementation.
+    /// The SwiftUI render, documentation recorder and color palette tools are in the shared SwiftUI
+    /// panel; this returns a screen that says so, or nil for any other ID.
     @MainActor
     static func debugInterfaceViewController(for featureID: String) -> UIViewController? {
-        let rootController: UIViewController
-        switch featureID {
-        case "swiftui_render":
-            rootController = InterfaceSwiftUIRenderController()
-        case "doc_recorder":
-            rootController = DocRecorderPanelController()
-        case "color_palette":
-            rootController = ColorPaletteController()
-        default:
-            return nil
-        }
-
+        let titles = ["swiftui_render": "SwiftUI Render Tracking", "doc_recorder": "Documentation Recorder", "color_palette": "Color Palette"]
+        guard let title = titles[featureID] else { return nil }
+        let rootController = SharedPanelOnlyViewController(
+            title: title,
+            message: "This tool is in the shared SwiftUI panel. Add DebugSwiftUI and call DebugSwiftSharedPanel.useForFloatingBall()."
+        )
         let navigationController = UINavigationController(rootViewController: rootController)
         navigationController.navigationBar.prefersLargeTitles = false
         navigationController.navigationBar.tintColor = .white
@@ -116,7 +111,7 @@ public extension DebugSwift {
     /// Interface options currently visible in the native debugger configuration.
     @MainActor
     static func availableInterfaceFeatureIDs() -> [String] {
-        InterfaceViewController.Features.allCasesWithPermissions.map { feature in
+        var featureIDs = InterfaceViewController.Features.allCasesWithPermissions.map { feature in
             switch feature {
             case .colorize: "colorize"
             case .animations: "animations"
@@ -124,10 +119,14 @@ public extension DebugSwift {
             case .grid: "grid"
             case .darkMode: "dark_mode"
             case .measurement: "measurement"
-            case .swiftUIRenderSettings: "swiftui_render"
-            case .docRecorder: "doc_recorder"
-            case .colorPalette: "color_palette"
             }
         }
+        // Tools with only a shared SwiftUI screen.
+        if !App.shared.disableMethods.contains(.swiftUIRender),
+           FeatureHandling.enabledBetaFeatures.contains(.swiftUIRenderTracking) {
+            featureIDs.append("swiftui_render")
+        }
+        featureIDs += ["doc_recorder", "color_palette"]
+        return featureIDs
     }
 }

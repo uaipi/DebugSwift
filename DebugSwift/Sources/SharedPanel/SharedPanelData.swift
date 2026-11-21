@@ -4,6 +4,7 @@
 //
 
 import Foundation
+import UIKit
 
 /// The data the shared SwiftUI panel (DebugSwiftUI) shows on iOS. On Android the Kotlin runtime
 /// answers the same operations, in the same JSON shapes, so one set of screens serves both.
@@ -17,6 +18,7 @@ public enum SharedPanelData {
     @MainActor
     public static func prepare() {
         SharedPanelPerformance.shared.prepare()
+        SharedPanelInterface.shared.prepare()
     }
 
     /// Whether DebugSwift's setup already ran (`DebugSwift().setup(...)` by the host), so the
@@ -35,6 +37,8 @@ public enum SharedPanelData {
             reply = app
         } else if let resources = SharedPanelResources.shared.resource(operation, arguments) {
             reply = resources
+        } else if let interface = SharedPanelInterface.shared.resource(operation, arguments) {
+            reply = interface
         } else {
             reply = ["error": "This tool is not available on iOS."]
         }
@@ -47,6 +51,7 @@ public enum SharedPanelData {
         SharedPanelPerformance.shared.perform(featureID: featureID, actionID: actionID, value: value)
             ?? SharedPanelApp.shared.perform(featureID: featureID, actionID: actionID, value: value)
             ?? SharedPanelResources.shared.perform(featureID: featureID, actionID: actionID, value: value)
+            ?? SharedPanelInterface.shared.perform(featureID: featureID, actionID: actionID, value: value)
     }
 
     /// A feature's text snapshot, or nil when this feature is not handled here.
@@ -54,6 +59,12 @@ public enum SharedPanelData {
     public static func snapshot(featureID: String) -> String? {
         SharedPanelPerformance.shared.snapshot(featureID: featureID)
             ?? SharedPanelApp.shared.snapshot(featureID: featureID)
+    }
+
+    /// The empty view the shared panel places in itself, so screen captures can leave it out.
+    @MainActor
+    public static func makePanelMarker() -> UIView {
+        SharedPanelMarkerView()
     }
 
     static func json(_ object: [String: Any]) -> String {
